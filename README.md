@@ -235,7 +235,7 @@ TCP就是为了解决流量控制(滑动窗口、拥塞窗口)、可靠传输(�
 
 TCP只是一个流传递
 
-客户端http请求 index.html|/image/logo.png|/lib/index.js|/css/main.css ------------request1\r\n\r\n|request2\r\n\r\n|request3\r\n\r\n|request4\r\n\r\n---------------> 服务器
+客户端http请求 ------------request1\r\n\r\n|request2\r\n\r\n|request3\r\n\r\n|request4\r\n\r\n---------------> 服务器
 
 客户端接收  <------------ ACK + response1\r\n\r\n|response2\r\n\r\n|response3\r\n\r\n|response4\r\n\r\n --------------- 服务器
 
