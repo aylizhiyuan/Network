@@ -6,6 +6,14 @@
 
 TCP能够在其用户之间的每个方向传输连续的字节流,将一些字节数据打包成段,通过互联网传输.
 
+一般情况下,TCP根据自己的情况来决定阻止和转发数据
+
+有时候,用户需要确定他们提交给TCP的所有数据都已传输
+
+为此，定义了推送功能。(设置PSH标记来提示接收方立即处理这些数据,而不必等待更多数据到达)
+
+推送会使TCP迅速转发并将该点之前的数据传递给接收方
+
 
 - 可靠性
 
@@ -190,6 +198,145 @@ Buffer Size如果该选项存在，那么它在发送该段的 TCP 上传达接�
 Padding: 这个用于确保TCP头部的结束和数据的开始都在4字节的边界上,由0进行填充
 
 ## 术语表
+
+发送序列变量
+
+```
+SND.UNA - send unacknowledged  等待确认已经发送的
+SND.NXT - send next 可靠传输的思路
+SND.WND - send window 流量控制
+SND.UP  - send urgent pointer 数据优先处理
+SND.WL1 - segment sequence number used for last window update
+SND.WL2 - segment acknowledgment number used for last window update
+ISS     - initial send sequence number 握手
+
+// WL1是对面更新窗口大小的时候,数据段的序号
+// WL2是对面更新窗口大小的时候,数据段的确认号
+// 记录接收方窗口更新的时候,接收方数据发送了多少数据,并确认了多少数据
+// 发送方可根据这个,来调整自己的发送速度
+```
+
+接受序列变量
+
+```
+RCV.NXT - receive next
+RCV.WND - receive window
+RCV.UP  - receive urgent pointer
+IRS     - initial receive sequence number
+```
+
+发送空间
+
+```
+    1         2          3          4
+----------|----------|----------|----------
+SND.UNA    SND.NXT    SND.UNA
+                     +SND.WND 表示结束点
+
+1 - old sequence numbers which have been acknowledged
+2 - sequence numbers of unacknowledged data
+3 - sequence numbers allowed for new data transmission
+4 - future sequence numbers which are not yet allowed
+```
+
+接收空间
+
+```
+  1          2          3
+----------|----------|----------
+RCV.NXT    RCV.NXT
+          +RCV.WND
+
+1 - old sequence numbers which have been acknowledged
+2 - sequence numbers allowed for new reception
+3 - future sequence numbers which are not yet allowed
+```
+
+当前TCP段的变量
+
+```
+SEG.SEQ - segment sequence number 数据段的序列号
+SEG.ACK - segment acknowledgment number 确认号
+SEG.LEN - segment length 数据段的长度
+SEG.WND - segment window 数据段的窗口大小
+SEG.UP  - segment urgent pointer
+SEG.PRC - segment precedence value
+```
+
+
+TCP连接状态
+
+```
+                              +---------+ ---------\      active OPEN
+                              |  CLOSED |            \    -----------
+                              +---------+<---------\   \   create TCB
+                                |     ^              \   \  snd SYN
+                   passive OPEN |     |   CLOSE        \   \
+                   ------------ |     | ----------       \   \
+                    create TCB  |     | delete TCB         \   \
+                                V     |                      \   \
+                              +---------+            CLOSE    |    \
+                              |  LISTEN |          ---------- |     |
+                              +---------+          delete TCB |     |
+                   rcv SYN      |     |     SEND              |     |
+                  -----------   |     |    -------            |     V
+ +---------+      snd SYN,ACK  /       \   snd SYN          +---------+
+ |         |<-----------------           ------------------>|         |
+ |   SYN   |                    rcv SYN                     |   SYN   |
+ |   RCVD  |<-----------------------------------------------|   SENT  |
+ |         |                    snd ACK                     |         |
+ |         |------------------           -------------------|         |
+ +---------+   rcv ACK of SYN  \       /  rcv SYN,ACK       +---------+
+   |           --------------   |     |   -----------
+   |                  x         |     |     snd ACK
+   |                            V     V
+   |  CLOSE                   +---------+
+   | -------                  |  ESTAB  |
+   | snd FIN                  +---------+
+   |                   CLOSE    |     |    rcv FIN
+   V                  -------   |     |    -------
+ +---------+          snd FIN  /       \   snd ACK          +---------+
+ |  FIN    |<-----------------           ------------------>|  CLOSE  |
+ | WAIT-1  |------------------                              |   WAIT  |
+ +---------+          rcv FIN  \                            +---------+
+   | rcv ACK of FIN   -------   |                            CLOSE  |
+   | --------------   snd ACK   |                           ------- |
+   V        x                   V                           snd FIN V
+ +---------+                  +---------+                   +---------+
+ |FINWAIT-2|                  | CLOSING |                   | LAST-ACK|
+ +---------+                  +---------+                   +---------+
+   |                rcv ACK of FIN |                 rcv ACK of FIN |
+   |  rcv FIN       -------------- |    Timeout=2MSL -------------- |
+   |  -------              x       V    ------------        x       V
+    \ snd ACK                 +---------+delete TCB         +---------+
+     ------------------------>|TIME WAIT|------------------>| CLOSED  |
+                              +---------+                   +---------+
+```
+
+
+## 序列号
+
+TCP设计中的一个基本的概念就是通过TCP连接发送的每个字节的数据都有一个序列号
+
+由于每个字节都是有顺序的,所以每个字节都可以被确认
+
+TCP所采用的确认机制是累积性的,因此序列号为X的确认表示已经收到了之前但不包括X的所有字节
+
+这种机制使得在存在重传的情况下可以直接进行重复检测
+
+假设发送方发送了1-100,接收方可能受到了1-90,并发送ack确认后为91。
+
+一个新的可接受的确认要满足
+
+```
+// 在确认当前的数据之前,必须先确认之前的所有的已经得到了确认,不然无法进行确认
+// NXT代表着即将要发送的数据,还没有发送
+SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT
+
+```
+
+对于每个连接,都有一个发送序列号和一个接受序列号
+
 
 
 
