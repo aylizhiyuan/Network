@@ -63,18 +63,11 @@ TCP为接收方提供了一种方法来管理发送方发送的数据量,注意�
 当他们的通信完成后,连接被终止或关闭,以释放资源用于其他用途
 
 
-## 基本原理
+## 可靠通信
 
+通过TCP连接上发送的数据流在目的地可靠且有序的传送
 
-进程通过调用TCP并将数据缓冲区作为参数来传输数据
-
-所以我们传递的实际就是个`&buf[u8;1500]`
-
-TCP将这些缓冲区中的数据打包成TCP段,并调用网络模块将每个TCP段传输到目的主机的TCP
-
-接受TCP将TCP段中的数据放入接收用户的缓冲区,并通知接收用户
-
-TCP把控制信息放在TCP段中,他们用于确保可靠有序的数据传输
+通过使用序号和确认机制,使得传输变得可靠
 
 从概念上讲,每个字节的数据都分配有一个序列号
 
@@ -85,6 +78,12 @@ TCP段还携带一个确认号码，这是期望对方传输的下一个字节�
 当TCP传输一个TCP段时,它会将TCP段的一个副本放在重传队列中,并启动一个计时器;当收到该数据的确认时,则将TCP段从重传队列中删除
 
 如果在定时器结束之前没有收到确认,则重传该TCP段
+
+为了管理进入TCP的数据流,采用了流量控制机制
+
+数据接收TCP向发送TCP报告一个窗口
+
+该窗口指定字节的数量,从数据接收的TCP目前准备接收的确认号码开始
 
 
 ## 数据通信
@@ -335,7 +334,152 @@ SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT
 
 ```
 
-对于每个连接,都有一个发送序列号和一个接受序列号
+对于每个连接,都有一个发送序列号和接收序列号
+
+初始发送序列号(ISS)由发送方的TCP选择,初始接受序列号(IRS)在连接建立过程中得到
+
+如果要建立或初始化的连接,两个TCP必须同步对方的初始化序列号
+
+这是通过交换建立连接的信息来完成的,这些信息带有一个称为`SYN`的控制位和初始序列号
+
+1) A –> B 同步自己的序列号 X
+2) A <– B 确认你的序列号是 X
+3) A <– B 同步自己的序列号 Y
+4) A –> B 确认你的序列号是 Y
+
+第二步和第三步可以结合在一个消息中,三次握手
+
+
+## 建立连接
+
+三次握手是用于建立连接的过程
+
+这个过程通常由一个TCP发起,由另一个TCP响应
+
+如果两个TCP同时发起连接,该过程也应正常工作
+
+当同时尝试建立连接的时候,TCP在发送`SYN`后,收到没有携带确认的`SYN`段
+
+当然,当接收者受到一个旧的重复的`SYN`段时,有可能会认为是同时建立连接
+
+```
+      TCP A                                                 TCP B
+  1.  CLOSED                                                LISTEN
+  2.  SYN-SENT    --> <SEQ=100><CTL=SYN>                --> SYN-RECEIVED
+  3.  ESTABLISHED <-- <SEQ=300><ACK=101><CTL=SYN,ACK>   <-- SYN-RECEIVED
+  4.  ESTABLISHED --> <SEQ=101><ACK=301><CTL=ACK>       --> ESTABLISHED
+  5.  ESTABLISHED --> <SEQ=101><ACK=301><CTL=ACK><DATA> --> ESTABLISHED
+```
+TCP A 开始发送一个`SYN`段,表明它将使用从序号100开始的序列号
+
+第三行,TCP B 发送了一个SYN,并确认了它从TCP A收到的SYN(SYN + ACK)
+
+第四行,TCP A发送了一个包含ACK的空段回应TCP B中的SYN
+
+第五行,TCP A开始发送数据了....
+
+同时建立连接稍微复杂一点
+
+```
+  TCP A                                                TCP B
+  1.  CLOSED                                           CLOSED
+  2.  SYN-SENT     --> <SEQ=100><CTL=SYN>              ...
+  3.  SYN-RECEIVED <-- <SEQ=300><CTL=SYN>              <-- SYN-SENT
+  4.               ... <SEQ=100><CTL=SYN>              --> SYN-RECEIVED
+  5.  SYN-RECEIVED --> <SEQ=100><ACK=301><CTL=SYN,ACK> ...
+  6.  ESTABLISHED  <-- <SEQ=300><ACK=101><CTL=SYN,ACK> <-- SYN-RECEIVED
+  7.               ... <SEQ=101><ACK=301><CTL=ACK>     --> ESTABLISHED
+```
+
+大致是这个样子的
+
+```
+A --> SYN --> B
+A <-- SYN <-- B
+A --> SYN --> B
+
+A --> SYN +ACK --> B
+A <-- SYN +ACK <-- B
+A --> ACK --> B
+```
+
+从之前重复SYN中恢复
+
+```
+ TCP A                                                TCP B
+  1.  CLOSED                                               LISTEN
+  2.  SYN-SENT    --> <SEQ=100><CTL=SYN>               ...
+  3.  (duplicate) ... <SEQ=90><CTL=SYN>                --> SYN-RECEIVED
+  4.  SYN-SENT    <-- <SEQ=300><ACK=91><CTL=SYN,ACK>   <-- SYN-RECEIVED
+  5.  SYN-SENT    --> <SEQ=91><CTL=RST>                --> LISTEN
+  6.              ... <SEQ=100><CTL=SYN>               --> SYN-RECEIVED
+  7.  SYN-SENT    <-- <SEQ=400><ACK=101><CTL=SYN,ACK>  <-- SYN-RECEIVED
+  8.  ESTABLISHED --> <SEQ=101><ACK=401><CTL=ACK>      --> ESTABLISHED
+```
+
+第三行中,一个之前重复的SYN 达到了 TCP B
+
+TCP B无法判断这是之前的SYN,所以它正常响应
+
+TCP A检测到ACK的字段不正确,然后返回了一个RST(重置),同时选择SEQ字段以使该TCP段可信
+
+TCP B则收到RST之后,返回到Listen状态
+
+
+如果其中一个TCP在另一个不知道的情况下关闭或终止了连接,或者连接的两端由于崩溃导致内存丢失而变得不同步，则已建立的连接称为”半开放“
+
+如果尝试向任一方向发送数据，这种连接将自动重置
+
+```
+ TCP A                                           TCP B
+  1.  (CRASH)                               (send 300,receive 100)
+  2.  CLOSED                                           ESTABLISHED
+  3.  SYN-SENT --> <SEQ=400><CTL=SYN>              --> (??)
+  4.  (!!)     <-- <SEQ=300><ACK=100><CTL=ACK>     <-- ESTABLISHED
+  5.  SYN-SENT --> <SEQ=100><CTL=RST>              --> (Abort!!)
+  6.  SYN-SENT                                         CLOSED
+  7.  SYN-SENT --> <SEQ=400><CTL=SYN>              -->
+```
+
+TCP A崩溃后,用户试图重新打开连接
+
+在此期间，TCP B认为连接是打开的
+
+在第三行,当SYN到达的时候，TCP B处于同步状态,而接收端在接收窗口之外,返回一个确认,ACK=100,表示它期望收到的下一个序列号
+
+TCP A看到这个TCP段没有确认它所发送的任何东西,由于不同步，发送了一个重置(RST),因为它检测到一个半开放的连接
+
+在第五行的时候，TCP B终止了
+
+TCP A 会继续尝试建立连接,开始三次握手了...
+
+
+```
+  TCP A                                         TCP B
+  1.  LISTEN                                        LISTEN
+  2.       ... <SEQ=Z><CTL=SYN>                -->  SYN-RECEIVED
+  3.  (??) <-- <SEQ=X><ACK=Z+1><CTL=SYN,ACK>   <--  SYN-RECEIVED
+  4.       --> <SEQ=Z+1><CTL=RST>              -->  (return to LISTEN!)
+  5.  LISTEN                                        LISTEN
+```
+
+上述也是导致RST的一种情况,在这里就不多解释了
+
+三种情况导致发送RST
+
+
+
+
+
+
+
+
+## 关闭连接
+
+
+
+
+## 数据通信
 
 
 
