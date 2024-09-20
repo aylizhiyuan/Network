@@ -550,7 +550,7 @@ TCP A                                                TCP B
 
 ## 数据通信
 
-- A发送一个SYN,序号为1000,此时,SND.NXT = 1001(A下一个将要发送的数据段的序列号)
+- A发送一个SYN,序号为1000,此时,SND.NXT = 1001(A下一个将要发送的数据段的序列号),SND.UNA = 1000(已经发送但是没有确认)
 
 - B收到了这个SYN,并返回SYN-ACK(同步确认)段,序列号为2000,确认号为1001,表示B期望收到A发送的下一个序列号,此时,RCV.NXT = 1001 
 
@@ -598,6 +598,43 @@ TCP 使用以下条件来决定何时在收到的数据包上发送 ACK
 
 这基本就是一个基础的TCP应该具备的功能
 
+
+
+## 三次握手的序号变化规则
+
+A发起连接:
+
+- 发送SYN, SEQ = X
+- SND.UNA = X
+- SND.NXT = X + 1
+
+B响应连接:
+
+- 收到SYN,RCV.NXT = X + 1
+- 发送SYN + ACK, SEQ = Y, ACK = X + 1
+- SND.UNA = Y
+- SND.NXT = Y + 1
+
+A 确认连接:
+
+- 收到SYN + ACK,RCV.NXT = Y + 1
+- 更新SND.UNA = X + 1
+- 发送ACK,SEQ = X + 1, ACK = Y + 1
+- SND.NXT = X  + 1
+
+B最终确认:
+
+- 收到ACK,RCV.NXT = X + 1
+- 更新SND.UNA = Y + 1
+
+
+## 数据发送的时候的变化
+
+
+客户端A的初始化序列号为X,三次握手后
+
+- SND.UNA = X + 1
+- SND.NXT = X + 1
 
 
 
