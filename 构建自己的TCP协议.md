@@ -604,28 +604,28 @@ TCP 使用以下条件来决定何时在收到的数据包上发送 ACK
 
 A发起连接:
 
-- 发送SYN, SEQ = X
-- SND.UNA = X
-- SND.NXT = X + 1
+- 发送SYN, 自己的序号SEQ = X
+- A.SND.UNA = X
+- A.SND.NXT = X + 1
 
 B响应连接:
 
-- 收到SYN,RCV.NXT = X + 1
-- 发送SYN + ACK, SEQ = Y, ACK = X + 1
-- SND.UNA = Y
-- SND.NXT = Y + 1
+- 收到SYN
+- 发送SYN + ACK, 自己的序号SEQ = Y, ACK = X + 1
+- B.SND.UNA = Y
+- B.SND.NXT = Y + 1
 
 A 确认连接:
 
-- 收到SYN + ACK,RCV.NXT = Y + 1
-- 更新SND.UNA = X + 1
+- 收到SYN + ACK,A.RCV.NXT = Y + 1,A期待接收到B发送的下一个字节
+- 更新A.SND.UNA = X + 1(已经被确认了)
 - 发送ACK,SEQ = X + 1, ACK = Y + 1
-- SND.NXT = X  + 1
+- A.SND.NXT = X  + 1(还未发送任何数据)
 
 B最终确认:
 
-- 收到ACK,RCV.NXT = X + 1
-- 更新SND.UNA = Y + 1
+- 收到ACK,B.RCV.NXT = X + 1
+- 更新B.SND.UNA = Y + 1
 
 
 ## 数据发送的时候的变化
@@ -633,36 +633,36 @@ B最终确认:
 
 客户端A的初始化序列号为X,三次握手后
 
-- SND.UNA = X + 1 (表示A已经发送的SYN被确认)
-- SND.NXT = X + 1 (表示下一个要发送的序列号)
+- A.SND.UNA = X + 1 (表示A已经发送的SYN被确认)
+- A.SND.NXT = X + 1 (表示下一个要发送的序列号)
 
 服务器B的初始化序列号为Y,在三次握手完成后
 
-- SND.UNA = Y + 1 (表示B已发送的SYN被确认)
-- SND.NXT = Y + 1 (表示下一个将要发送的序列号)
+- A.SND.UNA = Y + 1 (表示B已发送的SYN被确认)
+- A.SND.NXT = Y + 1 (表示下一个将要发送的序列号)
 
 数据发送的过程:
 
 1. A发送数据包(数据长度为L)
 
 - 报文内容
-  - SEQ = X + 1 (当前的SND.NXT)
-  - ACK = Y + 1 (确认B的SYN)
+  - SEG.SEQ = X + 1 (当前的SND.NXT)
+  - SEG.ACK = Y + 1 (确认B的SYN)
 - A的状态变化 -- 主要是更新NXT
-  - SND.UNA = X + 1 (已发送并确认的数据依然是X + 1)
-  - SND.NXT = X + 1 + L (下一个要发送的序列号,因为发送的数据是L字节)
-- B接收到数据包 -- 更新RCV.NXT
-  - B更新RCV.NXT = X + 1 + L (期望接收到的下一个序列号是A数据包结束后的序列号)
+  - A.SND.UNA = X + 1 (已发送并确认的数据依然是X + 1)
+  - A.SND.NXT = X + 1 + L (下一个要发送的序列号,因为发送的数据是L字节)
+- B接收到数据包 -- 主要是更新RCV.NXT
+  - B更新B.RCV.NXT = X + 1 + L (期望接收到的下一个序列号是A数据包结束后的序列号)
 - B发送ACK -- 更新ACK
  - 报文内容
-    - SEQ = Y + 1 (当前的SND.NXT)
-    - ACK = X + 1 + L (确认A发送的数据包) 
+    - SEG.SEQ = Y + 1 (当前的SND.NXT)
+    - SEG.ACK = X + 1 + L (确认A发送的数据包) 
 - B的状态变化(只是确认,不需要更新)
-  - SND.UNA = Y + 1 (确认发送的数据)
-  - SND.NXT = Y + 1 (下一个将要发送的序列号)     
+  - B.SND.UNA = Y + 1 (确认发送的数据)
+  - B.SND.NXT = Y + 1 (下一个将要发送的序列号)     
 - A收到ACK后 (更新UNA + NXT)
-  - SND.UNA = X + 1 + L
-  - SND.NXT = X + 1 + L
+  - A.SND.UNA = X + 1 + L
+  - A.SND.NXT = X + 1 + L
 
 
 总结:
@@ -673,14 +673,14 @@ B最终确认:
 
 - 发送端一开始发送的包里面包括了SEQ = SND.UNA = SND.NXT,通常都是相等的,发送端首先更新SND.NXT指向下一个包,然后带着序号发送过去,除非有人给它发送数据,否则它不需要更新自己的ACK,只需要更新序号和SND.NXT即可
 
-- 发送端接收到ACK后,直接将SND.UNA = SND.NXT = 回复的ACK号
+- 发送端接收到ACK后,直接更新SND.UNA = SND.NXT = 回复的ACK号
 
 这样,其实基本的TCP连接的交互就基本这样了,可能还会有其他逻辑的处理,但是基本的逻辑应该就是这样了,里面可能会涉及到每个操作系统中的TCB,TCB中要保存接收空间和发送空间,对应着本机的接收功能和发送功能,那么,另外一台机器同样也会有对应的TCB,同样也有自己的接收空间和发送空间....
 
 
+SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
 
-
-
+发送端已发送但是未确认 < 接收方已经确认的发送端数据 <= 发送端下一个要发送的字节
 
 
 
