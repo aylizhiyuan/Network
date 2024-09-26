@@ -684,6 +684,65 @@ SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT
 
 
 
+## 核心代码理解
+
+### 服务器端 -- 发送SYN + ACK
+
+```rust
+// TCP 服务器 接收ACK的逻辑
+// 接收空间保存客户端的SYN信息
+// 发送空间准备SYN + ACK的信息
+// 最终完成对SYN报文的处理工作
+
+// 接收空间
+// 更新自己RCV.NXT = 序号 + 1
+recv.nxt = tcph.sequence_number() + 1; 
+recv.wnd = tcph.window_size();
+recv.iss = tcph.sequence_number();
+
+// 初始化自己的发送空间
+send.iss = 0;
+send.una = 0;
+send.nxt = send.una + 1;
+send.wnd = 10;
+
+// 回复的ACK = 接收到的序号 + 1
+syn_ack.acknowledgment_number = tcph.sequence_number + 1;
+
+// SYN + ACK
+syn_ack.syn = true;
+syn_ack.ack = true;
+```
+
+### 服务器端 -- 数据包ACK检查
+
+
+```
+// 接收端已经确认的数据范围是发送端从未确认的数据到发送端下一个待发送的数据之间
+// SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
+// 发送端(服务器)已发送未确认 < 发送端(服务器)已经被确认的数据 <= 发送端(服务器)下一个要发送的数据
+// 代码的逻辑可以暂时省略,理解其中的含义最为关键,代码的逻辑可以放在一边了
+```
+
+### 服务器端 -- 检查有效段的合法性
+
+
+```
+// 1. 
+
+```
+
+### 服务器端 -- 状态变化
+
+```
+// LISTEN ---> SYN RECEIVED ----> ESTABLISHED
+// 初始状态下 ---> 收到SYN --->  收到ACK
+
+// 
+
+
+```
+
 
 
 
