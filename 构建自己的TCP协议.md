@@ -713,7 +713,28 @@ $ $CARGO_TAEGET_DIR/release/trust // 运行我们的应用程序
 
 
 ```shell
+$ sudo ip addr set 192.168.0.1/24 dev tun0 // 为我们的tun0设置设置IP地址
 
+$ ip link set up dev tun0 // 激活我们的tun0设备
+```
+
+我们的重启脚本
+
+```shell
+#!/bin/bash
+cargo -b --release
+sudo setcap cap_net_admin=eip $CARGO_TARGET_DIR/release/trust
+$CARGO_TARGET_DIR/release/trust & pid=$!
+sudo ip addr add 192.168.0.1/24 dev tun0
+# 当我们杀掉当前的进程的时候,它也会杀掉底层的程序
+sudo ip link set dev tun0
+
+# kill pid当你按下ctrl + c的时候,触发INT信号,或者是通过kill命令,触发TERM信号,杀掉该进程
+
+# 区别于脚本结束,这里是将该进程清理掉哦
+trap "kill $pid" INT TERM
+# 进程结束后,则脚本结束
+wait $pid
 ```
 
 ### 服务器端 -- 发送SYN + ACK
