@@ -1,5 +1,7 @@
 # 构建自己的TCP协议
 
+
+
 ## 可靠的概念以及完成的服务
 
 - 基础的数据传输
@@ -13,6 +15,15 @@ TCP能够在其用户之间的每个方向传输连续的字节流,将一些字�
 为此，定义了推送功能。(设置PSH标记来提示接收方立即处理这些数据,而不必等待更多数据到达)
 
 推送会使TCP迅速转发并将该点之前的数据传递给接收方
+
+```
+
+ A ----------- SEQ-A -------------> B // 发送A的数据
+ A <----------- ACK --------------- B // 确认A的数据
+ A <------------- SEQ-B ----------- B // 发送B的数据
+ A ------------- ACK -------------> B // 确认B的数据
+
+```
 
 
 - 可靠性
@@ -224,7 +235,6 @@ RCV.UP  - receive urgent pointer
 IRS     - initial receive sequence number
 ```
 
-发送空间
 
 ```
     1         2          3          4
@@ -604,14 +614,14 @@ TCP 使用以下条件来决定何时在收到的数据包上发送 ACK
 
 A发起连接:
 
-- 发送SYN, 自己的序号SEQ = X
+- 发送SYN, 自己的序号SEQ = X  (当前数据X)
 - A.SND.UNA = X
 - A.SND.NXT = X + 1
 
 B响应连接:
 
 - 收到SYN
-- 发送SYN + ACK, 自己的序号SEQ = Y, ACK = X + 1
+- 发送SYN + ACK, 自己的序号SEQ = Y, ACK = X + 1  (ACK是期待下一个数据)
 - B.SND.UNA = Y
 - B.SND.NXT = Y + 1
 
@@ -635,11 +645,13 @@ B最终确认:
 
 - A.SND.UNA = X + 1 (表示A已经发送的SYN被确认)
 - A.SND.NXT = X + 1 (表示下一个要发送的序列号)
+- A.SEQ = X + 1 (当前的SND.UNA)
 
 服务器B的初始化序列号为Y,在三次握手完成后
 
-- A.SND.UNA = Y + 1 (表示B已发送的SYN被确认)
-- A.SND.NXT = Y + 1 (表示下一个将要发送的序列号)
+- B.SND.UNA = Y + 1 (表示B已发送的SYN被确认)
+- B.SND.NXT = Y + 1 (表示下一个将要发送的序列号)
+- B.SEG = Y + 1 (当前的SND.UNA)
 
 数据发送的过程:
 
@@ -667,15 +679,15 @@ B最终确认:
 
 总结:
 
-- 在三次握手的时候,SND.UNA = SND.NXT, 两者是相等的,因为并未有任何的数据发送
+- 发送者发送数据之前,SND.UNA = SND.NXT = SEQ
 
-- 接收端需要接收数据,接收到的数据并更新RCV.NXT,期待得到的下一字节并且回复ACK = 发送端序号 + 数据长度
+- 发送者更新SND.NXT = SEQ + L
 
-- 发送端一开始发送的包里面包括了SEQ = SND.UNA = SND.NXT,通常都是相等的,发送端首先更新SND.NXT指向下一个包,然后带着序号发送过去,除非有人给它发送数据,否则它不需要更新自己的ACK,只需要更新序号和SND.NXT即可
+- 接收端更新RCV.NXT,并且回复ACK = SEQ + L
 
-- 发送端接收到ACK后,直接更新SND.UNA = SND.NXT = 回复的ACK号
+- 发送端接收到ACK后,更新SND.UNA = SND.NXT = ACK = SEQ + L
 
-这样,其实基本的TCP连接的交互就基本这样了,可能还会有其他逻辑的处理,但是基本的逻辑应该就是这样了,里面可能会涉及到每个操作系统中的TCB,TCB中要保存接收空间和发送空间,对应着本机的接收功能和发送功能,那么,另外一台机器同样也会有对应的TCB,同样也有自己的接收空间和发送空间....
+- 重复以上
 
 
 SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
@@ -685,6 +697,24 @@ SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT
 
 
 ## 核心代码理解
+
+
+### 初始化
+
+
+```shell
+
+$ sudo setcap cap_net_admin=eip $CARGO_TARGET_DIR/release/trust // 为我们的编译后的程序设置网络管理权限
+
+$ $CARGO_TAEGET_DIR/release/trust // 运行我们的应用程序
+```
+
+运行我们的`程序`,即可创建一个网卡,通过`ip addr`可以看到我们创建了一个名字为`tun0`的虚拟网卡设备,但是我们还未给它分配地址
+
+
+```shell
+
+```
 
 ### 服务器端 -- 发送SYN + ACK
 
@@ -722,13 +752,41 @@ syn_ack.ack = true;
 // SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
 // 发送端(服务器)已发送未确认 < 发送端(服务器)已经被确认的数据 <= 发送端(服务器)下一个要发送的数据
 // 代码的逻辑可以暂时省略,理解其中的含义最为关键,代码的逻辑可以放在一边了
+
+fn is_between_wrapped(start usize,x usize,end usize) -> bool {
+  use std::cmp::(Ord,Ordering);
+  match start.cmp(x) {
+    // 如果相等的话,直接返回
+    Ordering::Equal => return false; 
+    // S < X
+    Ordering::Less => {
+      if end >= start && end <= x {
+        return false;
+      }
+
+    }
+    // S > X 
+    Ordering::Greater => {
+      if end < start && end > x {
+
+      } else {
+        return false
+      }
+    }
+  }
+  true
+}
 ```
 
 ### 服务器端 -- 检查有效段的合法性
 
 
 ```
-// 1. 
+// 1. RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
+// 正在发送的数据序号要小于等于下一个即将要发送的数据序号,并且在窗口的有效范围内
+
+// 2. RCV.NXT =< SEG.SEQ + SEG.LEN - 1 < RCV.NXT + RCV.WND
+// 特殊之处在于
 
 ```
 
