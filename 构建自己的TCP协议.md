@@ -696,8 +696,6 @@ SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT
 
 发送端已发送但是未确认 < 接收方已经确认的发送端数据 <= 发送端下一个要发送的字节
 
-
-
 ## 核心代码理解
 
 
@@ -747,13 +745,13 @@ wait $pid
 // 发送空间准备SYN + ACK的信息
 // 最终完成对SYN报文的处理工作
 
-// 接收空间
+// 接收空间,作为接受者的空间
 // 更新自己RCV.NXT = 序号 + 1
 recv.nxt = tcph.sequence_number() + 1; 
 recv.wnd = tcph.window_size();
 recv.iss = tcph.sequence_number();
 
-// 初始化自己的发送空间
+// 发送空间通常就是自己
 send.iss = 0;
 send.una = 0;
 send.nxt = send.una + 1;
@@ -767,14 +765,13 @@ syn_ack.syn = true;
 syn_ack.ack = true;
 ```
 
-### 服务器端 -- 数据包ACK检查
+### 服务器端 -- 收到了来自客户端的ACK后的检查
 
 
 ```
-// 接收端已经确认的数据范围是发送端从未确认的数据到发送端下一个待发送的数据之间
-// SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
-// 发送端(服务器)已发送未确认 < 发送端(服务器)已经被确认的数据 <= 发送端(服务器)下一个要发送的数据
-// 代码的逻辑可以暂时省略,理解其中的含义最为关键,代码的逻辑可以放在一边了
+//  SND.UNA < SEG.ACK =< SND.NXT
+//  发送空间中未确定的数据 < 已经被确认的数据 =< 发送空间中即将要发送的数据
+// 确保我们发送空间的数据是正确的
 
 fn is_between_wrapped(start usize,x usize,end usize) -> bool {
   use std::cmp::(Ord,Ordering);
@@ -783,6 +780,9 @@ fn is_between_wrapped(start usize,x usize,end usize) -> bool {
     Ordering::Equal => return false; 
     // S < X
     Ordering::Less => {
+      // 简单的理解的话就是满足这个条件的基本都是不在两者之间的....
+      // ----- S --- E --- X ----
+      // ---- S+E 
       if end >= start && end <= x {
         return false;
       }
