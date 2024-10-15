@@ -765,13 +765,13 @@ syn_ack.syn = true;
 syn_ack.ack = true;
 ```
 
-### 服务器端 -- 收到了来自客户端的ACK后的检查
+### 服务器端 -- 检查发送数据的正确性
 
 
 ```
 //  SND.UNA < SEG.ACK =< SND.NXT
 //  发送空间中未确定的数据 < 已经被确认的数据 =< 发送空间中即将要发送的数据
-// 确保我们发送空间的数据是正确的
+//  确保我们发送空间的数据是正确的
 
 fn is_between_wrapped(start usize,x usize,end usize) -> bool {
   use std::cmp::(Ord,Ordering);
@@ -801,7 +801,7 @@ fn is_between_wrapped(start usize,x usize,end usize) -> bool {
 }
 ```
 
-### 服务器端 -- 检查有效段的合法性
+### 服务器端 -- 检查接受数据的正确性
 
 
 ```
