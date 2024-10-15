@@ -685,9 +685,11 @@ B最终确认:
 
 - 接收端更新RCV.NXT,并且回复ACK = SEQ + L
 
-- 发送端接收到ACK后,更新SND.UNA = SND.NXT = ACK = SEQ + L
+- 发送端接收到ACK后,更新SND.UNA = SND.NXT = ACK
 
 - 重复以上
+
+> 接收端就更新自己的ACK就行了,它不需要去关心什么,发送端在ACK后更新自己的SND.UNA = SND.NXT = SEQ 就完成了数据的向前移动了....
 
 
 SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
