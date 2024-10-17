@@ -767,7 +767,6 @@ syn_ack.ack = true;
 
 ### 服务器端 -- 检查发送数据的正确性
 
-
 ```
 //  SND.UNA < SEG.ACK =< SND.NXT
 //  发送空间中未确定的数据 < 已经被确认的数据 =< 发送空间中即将要发送的数据
@@ -807,75 +806,45 @@ fn is_between_wrapped(start usize,x usize,end usize) -> bool {
   }
   true
 }
+
+let ackn = tcph.acknowledgment_number();
+if(!is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1))) {
+  return Ok(());
+}
 ```
 
 ### 服务器端 -- 检查接受数据的正确性
 
 
 ```
-// 1. RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
-// 下一个即将接受的数据 =< 接收数据的第一个字节 < 接收数据范围
-
-// 2. RCV.NXT =< SEG.SEQ + SEG.LEN - 1 < RCV.NXT + RCV.WND
-// 检查接受数据的最后一个字节,同上
-
+// 序号
+let seqn = tcph.sequence_number();
+// 数据包长度
+let mut slen = data.len() as u32;
+if tcph.fin() {
+  slen += 1;
+}
+if tcph.syn() {
+  slen += 1;
+}
+// 数据的范围
+let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
+if slen == 0 {
+  if self.recv.wnd == 0 {
+    if seqn != self.recv.nxt {
+      return Ok(());
+    } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn,wend) {
+      return OK(());
+    }
+  }
+} else {
+  if self.recv.wnd == 0 {
+    return Ok(());
+  } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wend) && !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn+slen-1,wend) {
+    return OK(());
+  }
+}
 ```
-
-### 服务器端 -- 状态变化
-
-```
-// LISTEN ---> SYN RECEIVED ----> ESTABLISHED
-// 初始状态下 ---> 收到SYN --->  收到ACK
-
-// 
-
-
-```
-
-
-- 营销首页
-  - section1 - hero (login/create you AI)
-  - section2 - hero_footer_quotes
-  - section3 - images_example (照片墙)
-  - section4 - features 
-  - section5 - details
-  - section6 - new packs info 
-  - section7 - feature 
-  - section8 - FAQ
-  - section9 - packs 
-  - section10 - price & plan
-  - section11 - Footer
-
-- 生成页面
-  - section1 - Header (Login Register/set config)
-  - section2 - aside
-    - create new model (功能点1)
-    - select model (功能点2)
-    - set preferences (功能点3)
-    - take a photo (功能点4)
-    - remix a photo (功能点5)
-    - make a video (功能点6)
-    - try on clothes (功能点7)
-  - section3 - main
-    - new packs (新的AI模型包?)
-    - Prompts (AI提示词么?)
-    - camera 
-      - infinity scroll
-      - preview 
-      - download
-      - make video 
-      - remix photo
-      - edit (?)
-      - upScale(?)
-      - delete 
-    - saved (上传过的图片)
-    - deleted (删除过的图片)
-
-
-
-
-
-
 
 
 
