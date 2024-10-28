@@ -816,6 +816,10 @@ if(!is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1))) {
 ### 服务器端 -- 检查接受数据的正确性
 
 
+RCV.NXT =< SEG.SEQ  < RCV.NXT + RCV.WND
+RCV.NXT =< SEG.SEQ + SEG.LEN - 1 < RCV.NXT + RCV.WND
+
+
 ```
 // 序号
 let seqn = tcph.sequence_number();
@@ -846,11 +850,79 @@ if slen == 0 {
 }
 ```
 
+检查逻辑:
+
+- 如果数据长度`slen`为0
+  - 如果接收窗口`recv.wnd`为0
+    - 检查序号是否等于`recv.nxt`,如果不等则返回OK(表示不处理)
+    - 如果序号不在`recv.nxt -1,wend`范围内,也返回OK
+- 如果数据长度`slen`大于0
+  - 如果接收窗口`recv.wnd`为0,直接返回OK
+  - 检查序号是否在`recv.nxt - 1,wend`和`recv.nxt-1,seqn + slen -1`范围内,如果都不在,则返回OK
+
+返回`OK`意味着结束
 
 
+### 服务器端 -- 发送重置信号
+
+SND.UNA < SEG.ACK =< SND.NXT,通常发生这种情况表明客户端已经失去了同步或者发生了其他的错误,在这种情况下发送`RST`可以通知对方连接出现了问题
+
+`RST`意味着强制关闭一个连接
 
 
+```
+// 发送数据包的通用逻辑
+fn write(&mut self,nic:&mut tun_tap::Iface,payload:&[u8]) -> io::Result<(usize)> {
+  let mut buf = [0u8;1500];
+  // 1. 发送端取出自己的序号 SND.UNA = SND.NXT = SEQ 
+  self.tcp.sequence_number = self.send.nxt;
+  // 2. 发送端从接收队列中获取自己的ACK
+  self.tcp.acknowledgment_number = self.recv.nxt;
+  let size = std::cmp::min(buf.len(),self.tcp.header_len() as usize + self.ip.header_len() as usize + payload.len());
+  self.ip.set_payload_len(size);
+  // --------------
+  use std::io::Write;
+  let mut unwritten = &mut buf[...];
+  self.ip.write(&mut unwritten);
+  self.tcp.write(&mut unwritten);
+  let payload_bytes = unwritten.write(payload)?;
+  let unwritten = unwritten.len();
+  // 3. 发送端更新自己的NXT
+  self.send.nxt = self.send.nxt.wrapping_add(payload_bytes as u32);
+  if self.tcp.syn {
+    self.send.nxt = self.send.nxt.wrapping_add(1);
+    self.tcp.syn = false;
+  }
+  if self.tcp.fin {
+    self.send.nxt = self.send.nxt.wrapping_add(1);
+    self.tcp.fin = false;
+  }
+  nic.send(&buf[...buf.len() - unwritten])?;
+}
 
 
+// 发送重置包的逻辑
+fn send_rst(&mut self,nic:&mut tun_tap::Iface) -> io::Result<()> {
+  self.tcp.rst = true;
+  self.tcp.sequence_number = 0;
+  self.tcp.acknowledgment_number = 0;
+  self.write(nic,&[])?;
+  Ok(());
+}
+
+if !is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1)) {
+  if !self.state.is_synchronized() {
+    // 发送RST
+    self.send_rst(nic);
+  }
+  return Ok(());
+}
+```
 
 
+### 服务器端 -- 断开连接
+
+
+```
+
+```
