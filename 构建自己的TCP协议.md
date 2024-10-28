@@ -1,7 +1,5 @@
 # 构建自己的TCP协议
 
-
-
 ## 可靠的概念以及完成的服务
 
 - 基础的数据传输
@@ -811,6 +809,7 @@ let ackn = tcph.acknowledgment_number();
 if(!is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1))) {
   return Ok(());
 }
+
 ```
 
 ### 服务器端 -- 检查接受数据的正确性
@@ -844,10 +843,15 @@ if slen == 0 {
 } else {
   if self.recv.wnd == 0 {
     return Ok(());
-  } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wend) && !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn+slen-1,wend) {
+  } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wend) && !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wrapping_add(slen-1),wend) {
     return OK(());
   }
 }
+// 如果我们通过了这个检查,那么就意味着我们接收了至少一个字节了,所以我们需要更新我们的接收序列
+// 这里其实就是我们作为接收端唯一要做的事儿就是更新自己的接收的下一个数据序号
+self.recv.nxt = seqn.wrapping_add(slen);
+
+// 确保我们接收到的数据
 ```
 
 检查逻辑:
@@ -917,12 +921,4 @@ if !is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1)) {
   }
   return Ok(());
 }
-```
-
-
-### 服务器端 -- 断开连接
-
-
-```
-
 ```
