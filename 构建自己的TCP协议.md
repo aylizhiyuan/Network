@@ -750,7 +750,7 @@ wait $pid
 ### 2.服务器端 -- 通用:拆包&获取到TCP数据包
 
 ```
-//  ------ main.rs 
+//  ------ main.rs  Loop 循环接受任意的数据包
 // 使用connections.get(&quad)来获取state的值
 // 使用connections.get_mut(&quad)来修改state的值
 let mut connections:HashMap<Quad,tcp::State> = Default::default();
@@ -810,7 +810,7 @@ pub enum State {
 }
 impl Default for State {
   fn default() -> Self {
-    // 默认状态
+    // 默认状态,暂时先将它的默认状态调整为listen
     state::Listen
   }
 }
@@ -825,6 +825,14 @@ fn on_packet<'a>(
   match *self {
     State::Closed => {
       return;  // 如果它处于关闭状态,我们什么也不用做的
+    }
+    State::Listen => {
+      // 这个状态下,我们唯一收到的数据包就是SYN
+      if !tcph.syn() {
+        // 处理错误
+        return;
+      }
+      // 在此位置,我们需要完成我们的连接
     }
   }
 }
