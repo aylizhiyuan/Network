@@ -798,7 +798,32 @@ impl State {
 
 上述步骤的情况是我们已经拿到了客户端的TCP数据包,然后我们要根据实际的情况来对不同类型的包进行响应了
 
+这里,我们只需要在保持`listen`状态的情况下,接收到`SYN`的包,我们发送`SYN + ACK`并将状态转化为`SYN-REVD`状态,在此状态下,我们接收`ACK`并最终将状态更新为`ESTAB`的连接状态即可
+
 ```rust
+// 状态
+pub enum State {
+  CLosed, // 关闭的状态
+  Listen, // 正常情况下监听状态
+  SynRcvd, // 接收到对方的SYN的状态
+  Estab,  // 成功连接后的状态
+}
+impl Default for State {
+  fn default() -> Self {
+    // 默认状态
+    state::Listen
+  }
+}
+
+fn on_packet<'a>(
+  &mut self,
+  iph: etherparse::Ipv4HeaderSlice<'a>,
+  tcph: etherparse::TcpHeaderSlice<'a>,
+  data: &'a[u8],
+) {
+
+}
+
 // TCP 服务器 接收ACK的逻辑
 // 接收空间保存客户端的SYN信息
 // 发送空间准备SYN + ACK的信息
