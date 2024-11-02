@@ -751,9 +751,9 @@ wait $pid
 
 ```rust
 //  ------ main.rs  Loop 循环接受任意的数据包
-// 使用connections.get(&quad)来获取state的值
-// 使用connections.get_mut(&quad)来修改state的值
-let mut connections:HashMap<Quad,tcp::State> = Default::default();
+// 使用connections.get(&quad)来获取connection的值
+// 使用connections.get_mut(&quad)来修改connection的值
+let mut connections:HashMap<Quad,tcp::Connection> = Default::default();
 let mut nic = tun_tap::Iface::new("tun0",tun_tap::Mode::Tun)?;
 let mut buf = [0u8;1500];
 
@@ -773,16 +773,23 @@ loop {
 }
 
 // ----- tcp.rs
+enum State {
+  Closed,
+  Listen,
+  SynRcvd,
+  Estab,
+}
 // 结构体可以有字段,也可以有方法
-pub struct State {}
+pub struct Connection {
+  state: State
+}
 // 为我们的状态设置默认值
-impl Default for State {
+impl Default for Connection {
   fn default() -> Self {
-    state {
-
+    Connection {
+      state: State::Listen
     }
   }
-
 }
 // 我们拆包完后的逻辑判断在这里开始
 // state结构体中的方法
@@ -793,10 +800,9 @@ impl State {
     iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
     data:&'a[u8], // 数据部分
     ) {
-
+      // 待补充....
   }
 }
-
 ```
 
 ### 3.服务器端 -- 情况1:客户端发来SYN包,我们发送SYN + ACK来确认客户端的数据包
@@ -813,34 +819,49 @@ pub enum State {
   SynRcvd, // 接收到对方的SYN的状态
   Estab,  // 成功连接后的状态
 }
-impl Default for State {
+
+pub struct Connection {
+  state: State
+}
+
+// 发送空间
+struct SendSequenceSpace {
+
+}
+struct RecvSequenceSpace {
+  
+}
+
+impl Default for Connection {
   fn default() -> Self {
-    // 默认状态,暂时先将它的默认状态调整为listen
-    state::Listen
+    Connection {
+      state: State::Listen
+    }
   }
 }
 
-fn on_packet<'a>(
-  &mut self,
-  nic: &mut tun_tap:Iface,
-  iph: etherparse::Ipv4HeaderSlice<'a>,
-  tcph: etherparse::TcpHeaderSlice<'a>,
-  data: &'a[u8],
-) -> io:Result<usize> {
-  let mut buf = [0u8;1500];
-  // 它的取值就是个状态
-  match *self {
-    State::Closed => {
-      return;  // 如果它处于关闭状态,我们什么也不用做的
-    }
-    State::Listen => {
-      // 这个状态下,我们唯一收到的数据包就是SYN
-      if !tcph.syn() {
-        // 处理错误
-        return;
+impl State {
+    pub fn on_packet<'a>(
+    &mut self,
+    nic: &mut tun_tap:Iface,
+    iph: etherparse::Ipv4HeaderSlice<'a>,
+    tcph: etherparse::TcpHeaderSlice<'a>,
+    data: &'a[u8],
+  ) -> io:Result<usize> {
+    let mut buf = [0u8;1500];
+    // 它的取值就是个状态
+    match *self {
+      State::Closed => {
+        return Ok(0);  // 如果它处于关闭状态,我们什么也不用做的
       }
-      // 在此位置,我们需要完成我们的连接
-
+      State::Listen => {
+        // 这个状态下,我们唯一收到的数据包就是SYN
+        if !tcph.syn() {
+          // 处理错误
+          return Ok(0);
+        }
+        // 在此位置,我们需要完成我们的连接
+      }
     }
   }
 }
@@ -848,7 +869,7 @@ fn on_packet<'a>(
 
 ### 4.服务器端 -- 通用:发送数据之前检查发送数据的合法性
 
-```
+```rust
 //  SND.UNA < SEG.ACK =< SND.NXT
 //  发送空间中未确定的数据 < 已经被确认的数据 =< 发送空间中即将要发送的数据
 //  确保我们发送空间的数据是正确的
@@ -902,7 +923,7 @@ RCV.NXT =< SEG.SEQ  < RCV.NXT + RCV.WND
 RCV.NXT =< SEG.SEQ + SEG.LEN - 1 < RCV.NXT + RCV.WND
 
 
-```
+```rust
 // 序号
 let seqn = tcph.sequence_number();
 // 数据包长度
@@ -957,7 +978,7 @@ SND.UNA < SEG.ACK =< SND.NXT,通常发生这种情况表明客户端已经失去
 `RST`意味着强制关闭一个连接
 
 
-```
+```rust
 // 发送数据包的通用逻辑
 fn write(&mut self,nic:&mut tun_tap::Iface,payload:&[u8]) -> io::Result<(usize)> {
   let mut buf = [0u8;1500];
