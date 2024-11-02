@@ -747,10 +747,14 @@ wait $pid
 ```
 
 
-### 2.服务器端 -- 拆包&获取到TCP数据包
+### 2.服务器端 -- 通用:拆包&获取到TCP数据包
 
 ```
 //  ------ main.rs 
+// 使用connections.get(&quad)来获取state的值
+// 使用connections.get_mut(&quad)来修改state的值
+let mut connections:HashMap<Quad,tcp::State> = Default::default();
+
 //  IPHeader + TCPHeader + Data
 match etherparse::TcpHeaderSlice::from_slice(&buf[4+p.slice().len()..nbytes]){
   Ok(tcph) => {
@@ -769,9 +773,15 @@ match etherparse::TcpHeaderSlice::from_slice(&buf[4+p.slice().len()..nbytes]){
 pub struct State {}
 // 为我们的状态设置默认值
 impl Default for State {
+  fn default() -> Self {
+    state {
+
+    }
+  }
 
 }
 // 我们拆包完后的逻辑判断在这里开始
+// state结构体中的方法
 impl State {
   pub fn on_packet<'a>(
     &mut self,
@@ -784,7 +794,9 @@ impl State {
 
 ```
 
-### 3.服务器端 -- 发送SYN + ACK
+### 3.服务器端 -- 情况1:客户端发来SYN包,我们发送SYN + ACK来确认客户端的数据包
+
+上述步骤的情况是我们已经拿到了客户端的TCP数据包,然后我们要根据实际的情况来对不同类型的包进行响应了
 
 ```rust
 // TCP 服务器 接收ACK的逻辑
@@ -812,7 +824,7 @@ syn_ack.syn = true;
 syn_ack.ack = true;
 ```
 
-### 4.服务器端 -- 检查发送数据的正确性
+### 4.服务器端 -- 通用:发送数据之前检查发送数据的合法性
 
 ```
 //  SND.UNA < SEG.ACK =< SND.NXT
@@ -861,7 +873,7 @@ if(!is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1))) {
 
 ```
 
-### 5.服务器端 -- 检查接受数据的正确性
+### 5.服务器端 -- 通用:检查接受数据的正确性
 
 
 RCV.NXT =< SEG.SEQ  < RCV.NXT + RCV.WND
@@ -916,7 +928,7 @@ self.recv.nxt = seqn.wrapping_add(slen);
 返回`OK`意味着结束
 
 
-### 6.服务器端 -- 发送重置信号
+### 6.服务器端 -- 情况3:发送重置信号
 
 SND.UNA < SEG.ACK =< SND.NXT,通常发生这种情况表明客户端已经失去了同步或者发生了其他的错误,在这种情况下发送`RST`可以通知对方连接出现了问题
 
