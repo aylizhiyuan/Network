@@ -749,22 +749,26 @@ wait $pid
 
 ### 2.服务器端 -- 通用:拆包&获取到TCP数据包
 
-```
+```rust
 //  ------ main.rs  Loop 循环接受任意的数据包
 // 使用connections.get(&quad)来获取state的值
 // 使用connections.get_mut(&quad)来修改state的值
 let mut connections:HashMap<Quad,tcp::State> = Default::default();
+let mut nic = tun_tap::Iface::new("tun0",tun_tap::Mode::Tun)?;
+let mut buf = [0u8;1500];
 
-//  IPHeader + TCPHeader + Data
-match etherparse::TcpHeaderSlice::from_slice(&buf[4+p.slice().len()..nbytes]){
-  Ok(tcph) => {
-    // 数据部分的起始位置
-    let datai = 4 + iph.slice().len() + tcph.slice().len();
-    // tcph就是我们的TCPHeader
-    connections.entry(Quad {
-      src:(src,tcph.source_port()),
-      dst:(dst,tcph.destination_port_port())
-    }).or_default().on_packet(iph,tcph,&buf[datai..nbytes])
+loop {
+  //  IPHeader + TCPHeader + Data
+  match etherparse::TcpHeaderSlice::from_slice(&buf[4+p.slice().len()..nbytes]){
+    Ok(tcph) => {
+      // 数据部分的起始位置
+      let datai = 4 + iph.slice().len() + tcph.slice().len();
+      // tcph就是我们的TCPHeader
+      connections.entry(Quad {
+        src:(src,tcph.source_port()),
+        dst:(dst,tcph.destination_port_port())
+      }).or_default().on_packet(&mut nic,iph,tcph,&buf[datai..nbytes])
+    }
   }
 }
 
@@ -785,6 +789,7 @@ impl Default for State {
 impl State {
   pub fn on_packet<'a>(
     &mut self,
+    &mut nic,
     iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
     data:&'a[u8], // 数据部分
     ) {
@@ -817,10 +822,12 @@ impl Default for State {
 
 fn on_packet<'a>(
   &mut self,
+  nic: &mut tun_tap:Iface,
   iph: etherparse::Ipv4HeaderSlice<'a>,
   tcph: etherparse::TcpHeaderSlice<'a>,
   data: &'a[u8],
-) {
+) -> io:Result<usize> {
+  let mut buf = [0u8;1500];
   // 它的取值就是个状态
   match *self {
     State::Closed => {
@@ -833,33 +840,10 @@ fn on_packet<'a>(
         return;
       }
       // 在此位置,我们需要完成我们的连接
+
     }
   }
 }
-
-// TCP 服务器 接收ACK的逻辑
-// 接收空间保存客户端的SYN信息
-// 发送空间准备SYN + ACK的信息
-// 最终完成对SYN报文的处理工作
-
-// 接收空间,作为接受者的空间
-// 1. 更新自己RCV.NXT = 序号 + 1
-recv.nxt = tcph.sequence_number() + 1; 
-recv.wnd = tcph.window_size();
-recv.iss = tcph.sequence_number();
-
-// 初始化自己的发送空间
-send.iss = 0;
-send.una = 0;
-send.nxt = send.una + 1;
-send.wnd = 10;
-
-// 2. 回复的ACK = 接收到的序号 + 1
-syn_ack.acknowledgment_number = tcph.sequence_number + 1;
-
-// SYN + ACK
-syn_ack.syn = true;
-syn_ack.ack = true;
 ```
 
 ### 4.服务器端 -- 通用:发送数据之前检查发送数据的合法性
