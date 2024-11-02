@@ -821,7 +821,12 @@ fn on_packet<'a>(
   tcph: etherparse::TcpHeaderSlice<'a>,
   data: &'a[u8],
 ) {
-
+  // 它的取值就是个状态
+  match *self {
+    State::Closed => {
+      return;  // 如果它处于关闭状态,我们什么也不用做的
+    }
+  }
 }
 
 // TCP 服务器 接收ACK的逻辑
