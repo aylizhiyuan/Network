@@ -237,8 +237,8 @@ IRS     - initial receive sequence number
 ```
     1         2          3          4
 ----------|----------|----------|----------
-SND.UNA    SND.NXT    SND.UNA
-                     +SND.WND 表示结束点
+        SND.UNA    SND.NXT    SND.UNA
+                                +SND.WND 表示结束点
 
 1 - old sequence numbers which have been acknowledged
 2 - sequence numbers of unacknowledged data
@@ -251,8 +251,8 @@ SND.UNA    SND.NXT    SND.UNA
 ```
   1          2          3
 ----------|----------|----------
-RCV.NXT    RCV.NXT
-          +RCV.WND
+        RCV.NXT    RCV.NXT
+                  +RCV.WND
 
 1 - old sequence numbers which have been acknowledged
 2 - sequence numbers allowed for new reception
@@ -821,15 +821,18 @@ pub enum State {
 }
 
 pub struct Connection {
-  state: State
+  state: State, // 状态
+  send:SendSequenceSpace, // 发送空间
+  recv:RecvSequenceSpace, // 接收空间
 }
 
 // 发送空间
 struct SendSequenceSpace {
 
 }
+// 接收空间
 struct RecvSequenceSpace {
-  
+
 }
 
 impl Default for Connection {
