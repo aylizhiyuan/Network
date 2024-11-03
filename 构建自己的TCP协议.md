@@ -240,10 +240,10 @@ IRS     - initial receive sequence number
         SND.UNA    SND.NXT    SND.UNA
                                 +SND.WND 表示结束点
 
-1 - old sequence numbers which have been acknowledged
-2 - sequence numbers of unacknowledged data
-3 - sequence numbers allowed for new data transmission
-4 - future sequence numbers which are not yet allowed
+1 - 这部分就是我们已经发送过并且确认过的旧的数据
+2 - 这部分就是我们已经发送但是还未被确认的数据
+3 - 这部分是我们接下来要发送的数据  SND.UNA + SND.WND,应该不会超过这个范围的
+4 - 这部分是我们还不允许进行发送的数据
 ```
 
 接收空间
@@ -254,9 +254,9 @@ IRS     - initial receive sequence number
         RCV.NXT    RCV.NXT
                   +RCV.WND
 
-1 - old sequence numbers which have been acknowledged
-2 - sequence numbers allowed for new reception
-3 - future sequence numbers which are not yet allowed
+1 - 旧的数据已经被确认过的
+2 - 接下来期望接受到的数据 RCV.NXT + RCV.WND
+3 - 还未允许发送的数据
 ```
 
 当前TCP段的变量
@@ -562,11 +562,15 @@ TCP A                                                TCP B
 
 ## 数据通信
 
-- A发送一个SYN,序号为1000,此时,SND.NXT = 1001(A下一个将要发送的数据段的序列号),SND.UNA = 1000(已经发送但是没有确认)
+- A发送一个SYN,序号为1000,SND.UNA = SEG.SEQ = 1000,此时,SND.NXT = 1001(A下一个将要发送的数据段的序列号)
 
-- B收到了这个SYN,并返回SYN-ACK(同步确认)段,序列号为2000,确认号为1001,表示B期望收到A发送的下一个序列号,此时,RCV.NXT = 1001 
+- B首先更新自己的接收队列,RECV.NXT = SEG.SEQ + 1 = 1001 以表示自己即将接受的是1001
 
-- A收到B的确认后,发送ACK段，确认B的序列号2001，连接建立
+- B初始化自己的发送队列, SND.UNA = 2000  SND.NXT = 2001,并发送SEQ.ACK = RECV.NXT = 1001
+
+- A这边收到SYN + ACK的包,
+
+- B收到来自A的ACK后,
 
 假设A要发送一个500字节的数据段，序列号从1001开始
 
@@ -609,94 +613,6 @@ TCP 使用以下条件来决定何时在收到的数据包上发送 ACK
 3. 当延迟计时器过期的时候,发送 ACK
 
 这基本就是一个基础的TCP应该具备的功能
-
-
-
-### 1.三次握手的序号变化规则
-
-A发起连接:
-
-- 发送SYN, 自己的序号SEQ = X  (当前数据X)
-- A.SND.UNA = X
-- A.SND.NXT = X + 1
-
-B响应连接:
-
-- 收到SYN
-- 发送SYN + ACK, 自己的序号SEQ = Y, ACK = X + 1  (ACK是期待下一个数据)
-- B.SND.UNA = Y
-- B.SND.NXT = Y + 1
-
-A 确认连接:
-
-- 收到SYN + ACK,A.RCV.NXT = Y + 1,A期待接收到B发送的下一个字节
-- 更新A.SND.UNA = X + 1(已经被确认了)
-- 发送ACK,SEQ = X + 1, ACK = Y + 1
-- A.SND.NXT = X  + 1(还未发送任何数据)
-
-B最终确认:
-
-- 收到ACK,B.RCV.NXT = X + 1
-- 更新B.SND.UNA = Y + 1
-
-
-### 2.数据发送的时候的变化
-
-
-客户端A的初始化序列号为X,三次握手后
-
-- A.SND.UNA = X + 1 (表示A已经发送的SYN被确认)
-- A.SND.NXT = X + 1 (表示下一个要发送的序列号)
-- A.SEQ = X + 1 (当前的SND.UNA)
-
-服务器B的初始化序列号为Y,在三次握手完成后
-
-- B.SND.UNA = Y + 1 (表示B已发送的SYN被确认)
-- B.SND.NXT = Y + 1 (表示下一个将要发送的序列号)
-- B.SEG = Y + 1 (当前的SND.UNA)
-
-数据发送的过程:
-
-1. A发送数据包(数据长度为L)
-
-- 报文内容
-  - SEG.SEQ = X + 1 (当前的SND.NXT)
-  - SEG.ACK = Y + 1 (确认B的SYN)
-- A的状态变化 -- 主要是更新NXT
-  - A.SND.UNA = X + 1 (已发送并确认的数据依然是X + 1)
-  - A.SND.NXT = X + 1 + L (下一个要发送的序列号,因为发送的数据是L字节)
-- B接收到数据包 -- 主要是更新RCV.NXT
-  - B更新B.RCV.NXT = X + 1 + L (期望接收到的下一个序列号是A数据包结束后的序列号)
-- B发送ACK -- 更新ACK
- - 报文内容
-    - SEG.SEQ = Y + 1 (当前的SND.NXT)
-    - SEG.ACK = X + 1 + L (确认A发送的数据包) 
-- B的状态变化(只是确认,不需要更新)
-  - B.SND.UNA = Y + 1 (确认发送的数据)
-  - B.SND.NXT = Y + 1 (下一个将要发送的序列号)     
-- A收到ACK后 (更新UNA + NXT)
-  - A.SND.UNA = X + 1 + L
-  - A.SND.NXT = X + 1 + L
-
-
-### 总结:
-
-- 发送者发送数据之前,SND.UNA = SND.NXT = SEQ
-
-- 发送者更新SND.NXT = SEQ + L
-
-- 接收端更新RCV.NXT,并且回复ACK = SEQ + L
-
-- 发送端接收到ACK后,更新SND.UNA = SND.NXT = ACK
-
-- 重复以上
-
-> 接收端回复ACK以及更新NXT就行了,它不需要去关心什么,发送端在ACK后更新自己的SND.UNA = SND.NXT = SEQ 就完成了数据的向前移动了....
-
-
-SND.UNA < SEG.ACK(可接受的ACK) =< SND.NXT 
-
-发送端已发送但是未确认 < 接收方已经确认的发送端数据 <= 发送端下一个要发送的字节
 
 
 ## 代码理解
@@ -828,11 +744,20 @@ pub struct Connection {
 
 // 发送空间
 struct SendSequenceSpace {
-
+  una:usize,
+  nxt:usize,
+  wnd:usize,
+  up:bool,
+  wl1:usize,
+  wl2:usize,
+  iss:usize,
 }
 // 接收空间
 struct RecvSequenceSpace {
-
+  nxt:usize,
+  wnd:usize,
+  up:bool,
+  irs:usize,
 }
 
 impl Default for Connection {
@@ -853,7 +778,7 @@ impl State {
   ) -> io:Result<usize> {
     let mut buf = [0u8;1500];
     // 它的取值就是个状态
-    match *self {
+    match self.state {
       State::Closed => {
         return Ok(0);  // 如果它处于关闭状态,我们什么也不用做的
       }
@@ -864,6 +789,17 @@ impl State {
           return Ok(0);
         }
         // 在此位置,我们需要完成我们的连接
+        // 1. 首先我们在这里初始化我们的接收队列
+        // 我们已经在这个位置接受到了客户端发来的SYN
+        self.recv.nxt = tcph.sequence_number() + 1;
+        self.recv.wnd = tcph.window_size();
+        self.recv.irs = tcph.sequence_number();
+        // 2. 初始化自己的发送队列
+        self.send.una = 0;
+        self.send.nxt = self.una + 1;
+        self.send.wnd = 10;
+        self.send.iss = 0;
+
       }
     }
   }
