@@ -744,20 +744,20 @@ pub struct Connection {
 
 // 发送空间
 struct SendSequenceSpace {
-  una:usize,
-  nxt:usize,
-  wnd:usize,
+  una:u32,
+  nxt:u32,
+  wnd:u16,
   up:bool,
   wl1:usize,
   wl2:usize,
-  iss:usize,
+  iss:u32,
 }
 // 接收空间
 struct RecvSequenceSpace {
-  nxt:usize,
-  wnd:usize,
+  nxt:u32,
+  wnd:u16,
   up:bool,
-  irs:usize,
+  irs:u32,
 }
 
 impl Default for Connection {
@@ -795,10 +795,12 @@ impl State {
         self.recv.wnd = tcph.window_size();
         self.recv.irs = tcph.sequence_number();
         // 2. 初始化自己的发送队列
-        self.send.una = 0;
+        self.send.iss = 0;
+        self.send.una = self.send.iss;
         self.send.nxt = self.una + 1;
         self.send.wnd = 10;
-        self.send.iss = 0;
+        // 3. 封装SYN + ACK的包
+        
 
       }
     }
