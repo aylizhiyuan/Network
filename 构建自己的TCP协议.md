@@ -669,54 +669,72 @@ wait $pid
 //  ------ main.rs  Loop 循环接受任意的数据包
 // 使用connections.get(&quad)来获取connection的值
 // 使用connections.get_mut(&quad)来修改connection的值
-let mut connections:HashMap<Quad,tcp::Connection> = Default::default();
-let mut nic = tun_tap::Iface::new("tun0",tun_tap::Mode::Tun)?;
-let mut buf = [0u8;1500];
-
-loop {
-  //  IPHeader + TCPHeader + Data
-  match etherparse::TcpHeaderSlice::from_slice(&buf[4+p.slice().len()..nbytes]){
-    Ok(tcph) => {
-      // 数据部分的起始位置
-      let datai = 4 + iph.slice().len() + tcph.slice().len();
-      // tcph就是我们的TCPHeader
-      connections.entry(Quad {
-        src:(src,tcph.source_port()),
-        dst:(dst,tcph.destination_port_port())
-      }).or_default().on_packet(&mut nic,iph,tcph,&buf[datai..nbytes])
+use tsd::collections::HashMap;
+use std::io;
+use std::net::IpV4Addr;
+mod tcp;
+#[derive(Clone,Copy,Debug,Hash,Eq,PartialEq)]
+struct Quad {
+  src:(ipV4Addr,u16),
+  dst:(ipV4Addr,u16),
+}
+fn main() -> io::Result<()>  {
+  // connections.insert(key,value) 插入
+  // connections.get(key) 获取
+  // conenctions.remove(key) 删除
+  let mut connections: HashMap<Quad,tcp::Connection> = Default::default();
+  let mut nic = tun_tap::Iface::without_packet_info("tun0",tun_tap::Mode::Tun)?;
+  let mut buf = [0u8;1504];
+  loop {
+    let nbytes = nic.revc(&mut buf[..])?;
+    // let _eth_flags = u16::from_be_bytes([buf[0],buf[1]]);
+    // let _eth_proto = u16::from_be_bytes([buf[2],buf[3]]);
+    // if eth_proto != 0x800 {
+    //   // 不是ip数据包则忽略
+    //   continue;
+    // }
+    // 拆解我们的ip数据报文
+    match etherparse::Ipv4HeaderSlice::from_slice(&buf[..nbytes]) {
+      Ok(iph) => {
+        let src = iph.source_addr();
+        let dst = iph.destination_addr();
+        if iph.protocol() != 0x06 {
+          // not tcp
+          continue;
+        }
+        match etherparse::TcpHeaderSlice::from_slice(&buf[iph.slice().len()..nbytes]) {
+          Ok(tcp) => {
+            // 数据的位置
+            let datai = iph.slice().len() + tcph.slice().len();
+            match connections.entry(Quad {
+              src: (src,tcph.source_port()),
+              dst: (dst,tcph.destination_port()),
+            }) {
+              Entry::Occupied(c) => {
+                // 已经此Quad已经存在于Connections中了
+                // 代表已经建立了连接,我们直接处理数据
+                c.on_packet(&mut nic,iph,tcph,&buf[datai..nbytes])?;
+              }
+              Entry::Vacant(e) => {
+                // 这里我们接收一个通过accpet方法返回的新的连接,并将它插入到connections中
+                if let Some(c) = tcp::Connection::accept(
+                  &mut  nic,
+                  iph,
+                  tcph,
+                  &buf[datai..nbytes],
+                )?{
+                  e.insert(c);
+                }
+              }
+            }
+          }
+          Err(e) => {
+            eprintln!("ignoring weird tcp packet {:?}",e);
+          }
+        }
+      }
     }
-  }
-}
 
-// ----- tcp.rs
-enum State {
-  Closed,
-  Listen,
-  SynRcvd,
-  Estab,
-}
-// 结构体可以有字段,也可以有方法
-pub struct Connection {
-  state: State
-}
-// 为我们的状态设置默认值
-impl Default for Connection {
-  fn default() -> Self {
-    Connection {
-      state: State::Listen
-    }
-  }
-}
-// 我们拆包完后的逻辑判断在这里开始
-// state结构体中的方法
-impl State {
-  pub fn on_packet<'a>(
-    &mut self,
-    &mut nic,
-    iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
-    data:&'a[u8], // 数据部分
-    ) {
-      // 待补充....
   }
 }
 ```
@@ -728,6 +746,7 @@ impl State {
 这里,我们只需要在保持`listen`状态的情况下,接收到`SYN`的包,我们发送`SYN + ACK`并将状态转化为`SYN-REVD`状态,在此状态下,我们接收`ACK`并最终将状态更新为`ESTAB`的连接状态即可
 
 ```rust
+// --------- tcp.rs
 // 状态
 pub enum State {
   CLosed, // 关闭的状态
@@ -740,6 +759,7 @@ pub struct Connection {
   state: State, // 状态
   send:SendSequenceSpace, // 发送空间
   recv:RecvSequenceSpace, // 接收空间
+  ip: etherparse::IPv4Header // 通用的IP头部
 }
 
 // 发送空间
@@ -769,13 +789,13 @@ impl Default for Connection {
 }
 
 impl State {
-    pub fn on_packet<'a>(
+    pub fn accpet<'a>(
     &mut self,
     nic: &mut tun_tap:Iface,
     iph: etherparse::Ipv4HeaderSlice<'a>,
     tcph: etherparse::TcpHeaderSlice<'a>,
     data: &'a[u8],
-  ) -> io:Result<usize> {
+  ) -> io:Result<Self> {
     let mut buf = [0u8;1500];
     // 它的取值就是个状态
     match self.state {
@@ -788,182 +808,105 @@ impl State {
           // 处理错误
           return Ok(0);
         }
-        // 在此位置,我们需要完成我们的连接
-        // 1. 首先我们在这里初始化我们的接收队列
-        // 我们已经在这个位置接受到了客户端发来的SYN
-        self.recv.nxt = tcph.sequence_number() + 1;
-        self.recv.wnd = tcph.window_size();
-        self.recv.irs = tcph.sequence_number();
-        // 2. 初始化自己的发送队列
-        self.send.iss = 0;
-        self.send.una = self.send.iss;
-        self.send.nxt = self.una + 1;
-        self.send.wnd = 10;
-        // 3. 封装SYN + ACK的包
-        
-
+        let iss = 0;
+        // 1. 创建了一个连接实例
+        let mut c = Connection {
+          State:  State::SynRcvd,
+          // 初始化发送队列
+          send: SendSequenceSpace {
+            iss,
+            una:iss,
+            nxt:iss + 1,
+            wnd:10,
+            up:false,
+            wl1:0,
+            wl2:0,
+          },
+          // 接收队列
+          recv: RecvSequenceSpace {
+            irs: tcph.Sequence_number(),
+            nxt: tcph.Sequence_number() + 1,
+            wnd: tcph.window_size(),
+            up: false,
+          },
+          // IPHeader
+          ip: ehterparse::Ipv4Header::new(
+            0,
+            64,
+            etherparse::IpTrafficClass::Tcp,
+            [
+              iph.destination()[0],
+              iph.destination()[1],
+              iph.destination()[2],
+              iph.destination()[3],
+            ],[
+              iph.source()[0],
+              iph.source()[1],
+              iph.source()[2],
+              iph.source()[3]
+            ]
+          ),
+        }
+        // 2. 组装我们的数据包SYN + ACK
+        let mut syn_ack = etherparse::TcpHeader::new(
+          tcph.destination_port(),
+          tcph.source_port(),
+          c.send.iss,
+          c.send.wnd,
+        )
+        syn.ack.acknowledgment_number = c.recv.nxt;
+        syn_ack.syn = true;
+        syn_ack.ack = true;
+        c.ip.set_playload_len(syn_ack.header_len() + 0);
+        let unwritten = {
+          let mut unwritten = &mut buf[..];
+          c.ip.write(&mut unwritten);
+          syn_ack.write(&mut unwritten);
+          unwritten.len()
+        };
+        // 发送我们的SYN + ACK的包
+        nic.send(&buf[..unwritten])?;
+        Ok(Some(c))
       }
     }
   }
 }
-```
+pub fn on_packet<'a>(
+  &mut self,
+  nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
+  data:&'a [u8],)-> io::Result<usize>  {
+    //  这部分就是我们已经建立好链接后的状态判断了
+    match self.state {
+      State::SynRcvd => {
+        // 我们已经发送了SYN + ACK的状态
+        // 我们期望收到对方发来的ACK
 
-### 4.服务器端 -- 通用:发送数据之前检查发送数据的合法性
-
-```rust
-//  SND.UNA < SEG.ACK =< SND.NXT
-//  发送空间中未确定的数据 < 已经被确认的数据 =< 发送空间中即将要发送的数据
-//  确保我们发送空间的数据是正确的
-
-fn is_between_wrapped(start usize,x usize,end usize) -> bool {
-  use std::cmp::(Ord,Ordering);
-  match start.cmp(x) {
-    // 如果相等的话,直接返回
-    Ordering::Equal => return false; 
-    // S < X
-    // ---- S --- X -----
-    Ordering::Less => {
-      // 简单的理解的话就是满足这个条件的基本都是不在两者之间的....
-      // ----- S --- E --- X ----
-      // ---- S+E(两者重合) ---- x ----- 
-      // --- S ----- X+E(两者重合) ----- 
-      if end >= start && end <= x {
-        return false; // 不满足条件
       }
-
-    }
-    // S > X 
-    // ---- X ----- S -----
-    // 下面的条件是无法满足
-    //  ---- X ---- S ----- E ----
-    //  --- E ---- X ---- S ----
-    // ----- X+E ----- S -----
-    // ---- X ------ S+E -----
-    Ordering::Greater => {
-      if end < start && end > x {
-
-      } else {
-        return false
+      State::Estab => {
+        // 已经建立了连接了
       }
     }
-  }
-  true
 }
-
-let ackn = tcph.acknowledgment_number();
-if(!is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1))) {
-  return Ok(());
-}
-
 ```
 
-### 5.服务器端 -- 通用:检查接受数据的正确性
-
-
-RCV.NXT =< SEG.SEQ  < RCV.NXT + RCV.WND
-RCV.NXT =< SEG.SEQ + SEG.LEN - 1 < RCV.NXT + RCV.WND
-
+### 4.服务器端 -- 通用:数据通信之前,服务器被确认数据的合法性
 
 ```rust
-// 序号
-let seqn = tcph.sequence_number();
-// 数据包长度
-let mut slen = data.len() as u32;
-if tcph.fin() {
-  slen += 1;
-}
-if tcph.syn() {
-  slen += 1;
-}
-// 数据的范围
-let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
-if slen == 0 {
-  if self.recv.wnd == 0 {
-    if seqn != self.recv.nxt {
-      return Ok(());
-    } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn,wend) {
-      return OK(());
+pub fn on_packet<'a>(
+  &mut self,
+  nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
+  data:&'a [u8],)-> io::Result<usize>  {
+    // 之前,我们要检查SND.UNA < SEG.ACK =< SND.NXT
+    // 简单的说就是客户端已经确认收到的数据的合法性,变相的就是我们被确认数据的合法性
+    match self.state {
+      State::SynRcvd => {
+        // 我们已经发送了SYN + ACK的状态
+        // 我们期望收到对方发来的ACK
+
+      }
+      State::Estab => {
+        // 已经建立了连接了
+      }
     }
-  }
-} else {
-  if self.recv.wnd == 0 {
-    return Ok(());
-  } else if !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wend) && !is_between_wrappend(self.recv.nxt.wrapping_sub(1),seqn.wrapping_add(slen-1),wend) {
-    return OK(());
-  }
-}
-// 如果我们通过了这个检查,那么就意味着我们接收了至少一个字节了,所以我们需要更新我们的接收序列
-// 这里其实就是我们作为接收端唯一要做的事儿就是更新自己的接收的下一个数据序号
-self.recv.nxt = seqn.wrapping_add(slen);
-
-// 确保我们接收到的数据
-```
-
-检查逻辑:
-
-- 如果数据长度`slen`为0
-  - 如果接收窗口`recv.wnd`为0
-    - 检查序号是否等于`recv.nxt`,如果不等则返回OK(表示不处理)
-    - 如果序号不在`recv.nxt -1,wend`范围内,也返回OK
-- 如果数据长度`slen`大于0
-  - 如果接收窗口`recv.wnd`为0,直接返回OK
-  - 检查序号是否在`recv.nxt - 1,wend`和`recv.nxt-1,seqn + slen -1`范围内,如果都不在,则返回OK
-
-返回`OK`意味着结束
-
-
-### 6.服务器端 -- 情况3:发送重置信号
-
-SND.UNA < SEG.ACK =< SND.NXT,通常发生这种情况表明客户端已经失去了同步或者发生了其他的错误,在这种情况下发送`RST`可以通知对方连接出现了问题
-
-`RST`意味着强制关闭一个连接
-
-
-```rust
-// 发送数据包的通用逻辑
-fn write(&mut self,nic:&mut tun_tap::Iface,payload:&[u8]) -> io::Result<(usize)> {
-  let mut buf = [0u8;1500];
-  // 1. 发送端取出自己的序号 SND.UNA = SND.NXT = SEQ 
-  self.tcp.sequence_number = self.send.nxt;
-  // 2. 发送端从接收队列中获取自己的ACK
-  self.tcp.acknowledgment_number = self.recv.nxt;
-  let size = std::cmp::min(buf.len(),self.tcp.header_len() as usize + self.ip.header_len() as usize + payload.len());
-  self.ip.set_payload_len(size);
-  // --------------
-  use std::io::Write;
-  let mut unwritten = &mut buf[...];
-  self.ip.write(&mut unwritten);
-  self.tcp.write(&mut unwritten);
-  let payload_bytes = unwritten.write(payload)?;
-  let unwritten = unwritten.len();
-  // 3. 发送端更新自己的NXT
-  self.send.nxt = self.send.nxt.wrapping_add(payload_bytes as u32);
-  if self.tcp.syn {
-    self.send.nxt = self.send.nxt.wrapping_add(1);
-    self.tcp.syn = false;
-  }
-  if self.tcp.fin {
-    self.send.nxt = self.send.nxt.wrapping_add(1);
-    self.tcp.fin = false;
-  }
-  nic.send(&buf[...buf.len() - unwritten])?;
-}
-
-
-// 发送重置包的逻辑
-fn send_rst(&mut self,nic:&mut tun_tap::Iface) -> io::Result<()> {
-  self.tcp.rst = true;
-  self.tcp.sequence_number = 0;
-  self.tcp.acknowledgment_number = 0;
-  self.write(nic,&[])?;
-  Ok(());
-}
-
-if !is_between_wrappend(self.send.una,ackn,self.send.nxt.wrapping_add(1)) {
-  if !self.state.is_synchronized() {
-    // 发送RST
-    self.send_rst(nic);
-  }
-  return Ok(());
 }
 ```
