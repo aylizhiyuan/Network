@@ -896,17 +896,41 @@ pub fn on_packet<'a>(
   &mut self,
   nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
   data:&'a [u8],)-> io::Result<usize>  {
-    // 之前,我们要检查SND.UNA < SEG.ACK =< SND.NXT
-    // 简单的说就是客户端已经确认收到的数据的合法性,变相的就是我们被确认数据的合法性
+    // 每个已经建立连接的数据包都要检查SND.UNA < SEG.ACK =< SND.NXT
+    // 客户端的确认号是否在合理的范围内
     match self.state {
+      // 我们已经发送了SYN + ACK的状态
+      // 我们期望收到对方发来的ACK
       State::SynRcvd => {
-        // 我们已经发送了SYN + ACK的状态
-        // 我们期望收到对方发来的ACK
 
       }
       State::Estab => {
-        // 已经建立了连接了
+        // 完成了三次握手
       }
     }
+}
+// 判断x是在start和end区间之内的一个函数
+fn is_between_wrapped(start usize,x usize, end usize) -> bool {
+  use::std::cmp::Ordering;
+  match start.cmp(x) {
+    Ordering::Equal => return false,
+    Ordering::Less => {
+      // 在x > start的前提下,满足以下条件证明不在区间内
+      if end >= start && end <= x {
+        // 检查end是否不在start到x的区间,若不在则不满足
+        return false;
+      }
+    },
+    // 在x < start的前提下,满足以下条件证明不在区间内
+    Ordering::Greater => {
+      // 检查end是否在环绕区间内
+      if end < start && end > x {
+
+      } else {
+        return false;
+      }
+    }
+  }
+  true
 }
 ```
