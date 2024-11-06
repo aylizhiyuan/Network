@@ -663,7 +663,7 @@ wait $pid
 ```
 
 
-### 2.服务器端 -- 通用:拆包&获取到TCP数据包
+### 2.服务器端 -- main.ts主函数逻辑
 
 ```rust
 //  ------ main.rs  Loop 循环接受任意的数据包
@@ -739,7 +739,7 @@ fn main() -> io::Result<()>  {
 }
 ```
 
-### 3.服务器端 -- 情况1:客户端发来SYN包,我们发送SYN + ACK来确认客户端的数据包
+### 3.服务器端 -- tcp.rs逻辑
 
 上述步骤的情况是我们已经拿到了客户端的TCP数据包,然后我们要根据实际的情况来对不同类型的包进行响应了
 
@@ -755,11 +755,21 @@ pub enum State {
   Estab,  // 成功连接后的状态
 }
 
+impl State {
+  fn is_synchronized(&self) -> bool {
+    match *self {
+      State::SynRcvd => false, // 未同步
+      State::Estab => true, // 已经完成了同步
+    }
+  }
+}
+
 pub struct Connection {
   state: State, // 状态
   send:SendSequenceSpace, // 发送空间
   recv:RecvSequenceSpace, // 接收空间
-  ip: etherparse::IPv4Header // 通用的IP头部
+  ip: etherparse::IPv4Header, // 通用的IP头部
+  tcp: etherparse::TcpHeader, // 通用的TCP头部
 }
 
 // 发送空间
@@ -809,6 +819,7 @@ impl State {
           return Ok(0);
         }
         let iss = 0;
+        let wnd = 0;
         // 1. 创建了一个连接实例
         let mut c = Connection {
           State:  State::SynRcvd,
@@ -817,7 +828,7 @@ impl State {
             iss,
             una:iss,
             nxt:iss + 1,
-            wnd:10,
+            wnd,
             up:false,
             wl1:0,
             wl2:0,
@@ -829,6 +840,13 @@ impl State {
             wnd: tcph.window_size(),
             up: false,
           },
+          // TCPHeader
+          tcp: etherparse::TCPHeader::new(
+            tcph.destination_port(),
+            tcph.source_port(),
+            iss,
+            wnd,
+          ),
           // IPHeader
           ip: ehterparse::Ipv4Header::new(
             0,
@@ -848,15 +866,9 @@ impl State {
           ),
         }
         // 2. 组装我们的数据包SYN + ACK
-        let mut syn_ack = etherparse::TcpHeader::new(
-          tcph.destination_port(),
-          tcph.source_port(),
-          c.send.iss,
-          c.send.wnd,
-        )
-        syn.ack.acknowledgment_number = c.recv.nxt;
-        syn_ack.syn = true;
-        syn_ack.ack = true;
+        c.tcp.syn_ack.acknowledgment_number = c.recv.nxt;
+        c.tcp.syn_ack.syn = true;
+        c.tcp.syn_ack.ack = true;
         c.ip.set_playload_len(syn_ack.header_len() + 0);
         let unwritten = {
           let mut unwritten = &mut buf[..];
@@ -871,38 +883,72 @@ impl State {
     }
   }
 }
+// 发送RST
+pub fn send_rst() {
+  
+}
+// 建立连接情况下的数据处理
 pub fn on_packet<'a>(
   &mut self,
   nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
-  data:&'a [u8],)-> io::Result<usize>  {
-    //  这部分就是我们已经建立好链接后的状态判断了
-    match self.state {
-      State::SynRcvd => {
-        // 我们已经发送了SYN + ACK的状态
-        // 我们期望收到对方发来的ACK
-
+  data:&'a [u8],)-> io::Result<()>  {
+    // SND.UNA < SEG.ACK =< SND.NXT
+    // 客户端的确认号是否在合理的范围内
+    let ackn = tcph.acknowledgment_number();
+    if !is_between_wrapped(self.send.una,ackn,send.nxt.wrapping_add(1)) {
+      // 每当一个不合适当前连接的数据段到来的时候,我们就必须发送重置
+      // 它确认了尚未发送的内容,导致不同步
+      if !self.state.is_synchronized() {
+        // 发送重置
+        self.send_rst(nic)
       }
-      State::Estab => {
-        // 已经建立了连接了
+      return Ok(());
+    }
+    // 数据包的序号
+    let seqn = tcph.sequence_number();
+    let mut slen =  data.len() as u32;
+    // 这里可能会把带有fin标记位的以及带有syn标记位的统一数据长度改为1
+    if tcph.fin() {
+      slen += 1;
+    }
+    if tcph.syn() {
+      slen += 1;
+    }
+    // 这个猜测应该是可接受数据范围吧
+    let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
+    // 1. 针对0长度的数据包
+    if slen == 0 {
+      if self.recv.wnd == 0 {
+        if seqn != self.recv.nxt {
+          return Ok(());
+        }
+      } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn,wend){
+        // RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
+        return Ok(());
+      }
+    } else {
+      // 2. 针对有数据的包
+      if self.recv.wnd == 0 {
+        // 如果接收窗口为0了，我们就不需要进行任何检查了
+        return Ok(());
+      } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn,wend) 
+      && !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn + slen - 1,wend) {
+        // RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
+        // RCV.NXT =< SEG.SEQ + SEG.LEN -1 < RCV.NXT + RCV.WND
+        return Ok(());
       }
     }
-}
-```
-
-### 4.服务器端 -- 通用:数据通信之前,服务器被确认数据的合法性
-
-```rust
-pub fn on_packet<'a>(
-  &mut self,
-  nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
-  data:&'a [u8],)-> io::Result<usize>  {
-    // 每个已经建立连接的数据包都要检查SND.UNA < SEG.ACK =< SND.NXT
-    // 客户端的确认号是否在合理的范围内
     match self.state {
       // 我们已经发送了SYN + ACK的状态
       // 我们期望收到对方发来的ACK
       State::SynRcvd => {
-
+        if !tcph.ack() {
+          // 它必须是一个ACK
+          return Ok(());
+        }
+        // 连接状态
+        self.state = Estab;
+        // 这里为什么要终止连接呢？
       }
       State::Estab => {
         // 完成了三次握手
@@ -910,7 +956,7 @@ pub fn on_packet<'a>(
     }
 }
 // 判断x是在start和end区间之内的一个函数
-fn is_between_wrapped(start usize,x usize, end usize) -> bool {
+fn is_between_wrapped(start:u32,x:u32, end:u32) -> bool {
   use::std::cmp::Ordering;
   match start.cmp(x) {
     Ordering::Equal => return false,
