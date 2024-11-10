@@ -894,6 +894,7 @@ pub fn write(&mut self,nic: &mut tun_tap::Iface,payload:&[u8]) -> io::Result<usi
   // 更新发送的下一个序列号
   self.send.nxt = self.send.nxt.wrapping_add(payload_bytes as u32);
   // 如果SYN或FIN标记位为真,则相应的序列号+1
+  // 只是为了让SYN/FIN消耗一个序号
   if self.tcp.syn {
     self.send.nxt = self.send.nxt.wrapping_add(1);
     self.tcp.syn = false;
