@@ -669,7 +669,7 @@ wait $pid
 //  ------ main.rs  Loop 循环接受任意的数据包
 // 使用connections.get(&quad)来获取connection的值
 // 使用connections.get_mut(&quad)来修改connection的值
-use tsd::collections::HashMap;
+use std::collections::HashMap;
 use std::io;
 use std::net::IpV4Addr;
 mod tcp;
@@ -716,9 +716,9 @@ fn main() -> io::Result<()>  {
                 c.on_packet(&mut nic,iph,tcph,&buf[datai..nbytes])?;
               }
               Entry::Vacant(e) => {
-                // 这里我们接收一个通过accpet方法返回的新的连接,并将它插入到connections中
+                // 这里我们接收一个通过accpet方法返回的新的connection,并将它插入到connections中
                 if let Some(c) = tcp::Connection::accept(
-                  &mut  nic,
+                  &mut nic,
                   iph,
                   tcph,
                   &buf[datai..nbytes],
@@ -798,7 +798,7 @@ impl Default for Connection {
   }
 }
 
-impl State {
+impl Connection {
     pub fn accpet<'a>(
     &mut self,
     nic: &mut tun_tap:Iface,
@@ -806,7 +806,6 @@ impl State {
     tcph: etherparse::TcpHeaderSlice<'a>,
     data: &'a[u8],
   ) -> io:Result<Self> {
-    let mut buf = [0u8;1500];
     // 它的取值就是个状态
     match self.state {
       State::Closed => {
@@ -822,12 +821,12 @@ impl State {
         let wnd = 0;
         // 1. 创建了一个连接实例
         let mut c = Connection {
-          State:  State::SynRcvd,
+          State: State::SynRcvd, // 接收到了SYN
           // 初始化发送队列
           send: SendSequenceSpace {
             iss,
             una:iss,
-            nxt:iss + 1,
+            nxt:iss,
             wnd,
             up:false,
             wl1:0,
@@ -836,7 +835,7 @@ impl State {
           // 接收队列
           recv: RecvSequenceSpace {
             irs: tcph.Sequence_number(),
-            nxt: tcph.Sequence_number() + 1,
+            nxt: tcph.Sequence_number() + 1, // 接收数据的时候更新自己的接收队列 序号 + 1
             wnd: tcph.window_size(),
             up: false,
           },
@@ -866,26 +865,64 @@ impl State {
           ),
         }
         // 2. 组装我们的数据包SYN + ACK
-        c.tcp.syn_ack.acknowledgment_number = c.recv.nxt;
-        c.tcp.syn_ack.syn = true;
-        c.tcp.syn_ack.ack = true;
-        c.ip.set_playload_len(syn_ack.header_len() + 0);
-        let unwritten = {
-          let mut unwritten = &mut buf[..];
-          c.ip.write(&mut unwritten);
-          syn_ack.write(&mut unwritten);
-          unwritten.len()
-        };
-        // 发送我们的SYN + ACK的包
-        nic.send(&buf[..unwritten])?;
+        self.tcp.syn = true;
+        self.tcp.ack = true;
+        c.write(nic,&[])?;
         Ok(Some(c))
       }
     }
   }
 }
+// 通用的发送逻辑 -- 建立连接的时候
+pub fn write(&mut self,nic: &mut tun_tap::Iface,payload:&[u8]) -> io::Result<usize> {
+  // buf是一个1500字节大小的缓冲区,用于构建完整的tcp/ip包
+  // 通常用于容纳IP头部、TCP头部和数据
+  let mut buf = [0u8;1500];
+  // 数据包序列号  SEG.SEQ = SND.NXT
+  self.tcp.sequence_number = self.send.nxt;
+  // 数据包确认号  SEG.ACK = RCV.NXT
+  self.tcp.ackknowledgment_number = self.recv.nxt;
+  // size表示最终要发送的数据大小,基于IP头部、TCP头部和数据的长度来计算
+  // 确保总长度不会超过缓冲区大小buf.len()
+  let size = std::cmp::min(buf.len(),self.tcp.header_len() as usize + self.ip.header_len() as usize  + payload.len());
+  // 这个应该是设置IP数据包的有效长度
+  self.ip.set_payload_len(size);
+  use std::io::Write;
+  // 将IP和TCP的头部写入到缓冲区的unwritten部分
+  // 这一步完成后,buf中已经包含了IP和TCP头部信息了
+  let mut unwritten = &mut buf[..];
+  self.ip.write(&mut unwritten);
+  self.tcp.write(&mut unwritten);
+  // 将实际的数据playload写入,并返回写入的数据长度
+  let payload_bytes = unwritten.write(payload)?;
+  let unwritten = unwritten.len();
+  // 更新发送的下一个序列号
+  self.send.nxt.wrapping_add(payload_bytes as u32);
+  // 如果SYN或FIN标记位为真,则相应的序列号+1
+  if self.tcp.syn {
+    self.send.nxt = self.send.nxt.wrapping_add(1);
+    self.tcp.syn = false;
+  }
+  if self.tcp.fin {
+    self.send.nxt = self.send.nxt.wrapping_add(1);
+    self.tcp.fin = false;
+  }
+  // 确保只发送有效部分,包含头部和数据负载,不包含未使用的缓冲部分
+  nic.send(&buf[..buf.len() - unwritten])?;
+  Ok(payload_bytes)
+}
 // 发送RST
-pub fn send_rst() {
-  
+pub fn send_rst<'a>(
+  &mut self,
+  nic: &mut tun_tap::Iface,
+) -> io::Result<()> {
+  self.tcp.rst = true;
+  // TODO:需要修复我们的序列号
+  // TODO: 处理同步复位
+  self.tcp.sequence_number = 0;
+  self.tcp.acknowledgment_number = 0;
+  self.write(nic,&[])?;
+  Ok(())
 }
 // 建立连接情况下的数据处理
 pub fn on_packet<'a>(
@@ -947,7 +984,7 @@ pub fn on_packet<'a>(
           return Ok(());
         }
         // 连接状态
-        self.state = Estab;
+        self.state = State::Estab;
         // 这里为什么要终止连接呢？
       }
       State::Estab => {
