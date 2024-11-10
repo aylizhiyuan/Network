@@ -749,17 +749,20 @@ fn main() -> io::Result<()>  {
 // --------- tcp.rs
 // 状态
 pub enum State {
-  CLosed, // 关闭的状态
-  Listen, // 正常情况下监听状态
-  SynRcvd, // 接收到对方的SYN的状态
-  Estab,  // 成功连接后的状态
+  // Listen,
+  SynRcvd,
+  Estab,
+  FinWait1,
+  FinWait2,
+  Closing,
+  TimeWait,
 }
 
 impl State {
   fn is_synchronized(&self) -> bool {
     match *self {
       State::SynRcvd => false, // 未同步
-      State::Estab => true, // 已经完成了同步
+      State::Estab | State::FinWait1 | State::FinWait2 | State::TimeWait => true, // 已经完成了同步
     }
   }
 }
@@ -805,72 +808,64 @@ impl Connection {
     iph: etherparse::Ipv4HeaderSlice<'a>,
     tcph: etherparse::TcpHeaderSlice<'a>,
     data: &'a[u8],
-  ) -> io:Result<Self> {
-    // 它的取值就是个状态
-    match self.state {
-      State::Closed => {
-        return Ok(0);  // 如果它处于关闭状态,我们什么也不用做的
-      }
-      State::Listen => {
-        // 这个状态下,我们唯一收到的数据包就是SYN
-        if !tcph.syn() {
-          // 处理错误
-          return Ok(0);
-        }
-        let iss = 0;
-        let wnd = 0;
-        // 1. 创建了一个连接实例
-        let mut c = Connection {
-          State: State::SynRcvd, // 接收到了SYN
-          // 初始化发送队列
-          send: SendSequenceSpace {
-            iss,
-            una:iss,
-            nxt:iss,
-            wnd,
-            up:false,
-            wl1:0,
-            wl2:0,
-          },
-          // 接收队列
-          recv: RecvSequenceSpace {
-            irs: tcph.Sequence_number(),
-            nxt: tcph.Sequence_number() + 1, // 接收数据的时候更新自己的接收队列 序号 + 1
-            wnd: tcph.window_size(),
-            up: false,
-          },
-          // TCPHeader
-          tcp: etherparse::TCPHeader::new(
-            tcph.destination_port(),
-            tcph.source_port(),
-            iss,
-            wnd,
-          ),
-          // IPHeader
-          ip: ehterparse::Ipv4Header::new(
-            0,
-            64,
-            etherparse::IpTrafficClass::Tcp,
-            [
-              iph.destination()[0],
-              iph.destination()[1],
-              iph.destination()[2],
-              iph.destination()[3],
-            ],[
-              iph.source()[0],
-              iph.source()[1],
-              iph.source()[2],
-              iph.source()[3]
-            ]
-          ),
-        }
-        // 2. 组装我们的数据包SYN + ACK
-        self.tcp.syn = true;
-        self.tcp.ack = true;
-        c.write(nic,&[])?;
-        Ok(Some(c))
-      }
+  ) -> io:Result<Option<Self>> {
+    // 这个状态下,我们唯一收到的数据包就是SYN
+    if !tcph.syn() {
+      // 处理错误
+      return Ok(0);
     }
+    let iss = 0;
+    let wnd = 1024;
+    // 1. 创建了一个连接实例
+    let mut c = Connection {
+      State: State::SynRcvd, // 接收到了SYN
+      // 初始化发送队列
+      send: SendSequenceSpace {
+        iss,
+        una:iss,
+        nxt:iss,
+        wnd,
+        up:false,
+        wl1:0,
+        wl2:0,
+      },
+      // 接收队列
+      recv: RecvSequenceSpace {
+        irs: tcph.Sequence_number(),
+        nxt: tcph.Sequence_number() + 1, // 接收数据的时候更新自己的接收队列 序号 + 1
+        wnd: tcph.window_size(),
+        up: false,
+      },
+      // TCPHeader
+      tcp: etherparse::TCPHeader::new(
+        tcph.destination_port(),
+        tcph.source_port(),
+        iss,
+        wnd,
+      ),
+      // IPHeader
+      ip: ehterparse::Ipv4Header::new(
+        0,
+        64,
+        etherparse::IpTrafficClass::Tcp,
+        [
+          iph.destination()[0],
+          iph.destination()[1],
+          iph.destination()[2],
+          iph.destination()[3],
+        ],[
+          iph.source()[0],
+          iph.source()[1],
+          iph.source()[2],
+          iph.source()[3]
+        ]
+      ),
+    }
+    // 2. 组装我们的数据包SYN + ACK
+    c.tcp.syn = true;
+    c.tcp.ack = true;
+    c.write(nic,&[])?;
+    Ok(Some(c))
   }
 }
 // 通用的发送逻辑 -- 建立连接的时候
@@ -885,8 +880,8 @@ pub fn write(&mut self,nic: &mut tun_tap::Iface,payload:&[u8]) -> io::Result<usi
   // size表示最终要发送的数据大小,基于IP头部、TCP头部和数据的长度来计算
   // 确保总长度不会超过缓冲区大小buf.len()
   let size = std::cmp::min(buf.len(),self.tcp.header_len() as usize + self.ip.header_len() as usize  + payload.len());
-  // 这个应该是设置IP数据包的有效长度
-  self.ip.set_payload_len(size);
+  // 这个应该是设置IP数据包的数据有效长度
+  self.ip.set_payload_len(size - self.ip.header_len() as usize);
   use std::io::Write;
   // 将IP和TCP的头部写入到缓冲区的unwritten部分
   // 这一步完成后,buf中已经包含了IP和TCP头部信息了
@@ -897,7 +892,7 @@ pub fn write(&mut self,nic: &mut tun_tap::Iface,payload:&[u8]) -> io::Result<usi
   let payload_bytes = unwritten.write(payload)?;
   let unwritten = unwritten.len();
   // 更新发送的下一个序列号
-  self.send.nxt.wrapping_add(payload_bytes as u32);
+  self.send.nxt = self.send.nxt.wrapping_add(payload_bytes as u32);
   // 如果SYN或FIN标记位为真,则相应的序列号+1
   if self.tcp.syn {
     self.send.nxt = self.send.nxt.wrapping_add(1);
@@ -929,18 +924,6 @@ pub fn on_packet<'a>(
   &mut self,
   nic:&mut tun_tap::Iface,iph:etherparse::Ipv4HeaderSlice<'a>,tcph:etherparse::TcpHeaderSlice<'a>,
   data:&'a [u8],)-> io::Result<()>  {
-    // SND.UNA < SEG.ACK =< SND.NXT
-    // 客户端的确认号是否在合理的范围内
-    let ackn = tcph.acknowledgment_number();
-    if !is_between_wrapped(self.send.una,ackn,send.nxt.wrapping_add(1)) {
-      // 每当一个不合适当前连接的数据段到来的时候,我们就必须发送重置
-      // 它确认了尚未发送的内容,导致不同步
-      if !self.state.is_synchronized() {
-        // 发送重置
-        self.send_rst(nic)
-      }
-      return Ok(());
-    }
     // 数据包的序号
     let seqn = tcph.sequence_number();
     let mut slen =  data.len() as u32;
@@ -954,48 +937,88 @@ pub fn on_packet<'a>(
     // 这个猜测应该是可接受数据范围吧
     let wend = self.recv.nxt.wrapping_add(self.recv.wnd as u32);
     // 1. 针对0长度的数据包
-    if slen == 0 {
+    let okay  = if slen == 0 {
       if self.recv.wnd == 0 {
         if seqn != self.recv.nxt {
-          return Ok(());
+          false
+        } else {
+          true
         }
       } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn,wend){
         // RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
-        return Ok(());
+        false
+      } else {
+        true
       }
     } else {
       // 2. 针对有数据的包
       if self.recv.wnd == 0 {
         // 如果接收窗口为0了，我们就不需要进行任何检查了
-        return Ok(());
+        false
       } else if !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn,wend) 
-      && !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn + slen - 1,wend) {
+      && !is_between_wrapped(self.recv.nxt.wrapping_sub(1),seqn.wrrapping_add(slen - 1),wend) {
         // RCV.NXT =< SEG.SEQ < RCV.NXT + RCV.WND
         // RCV.NXT =< SEG.SEQ + SEG.LEN -1 < RCV.NXT + RCV.WND
+        false
+      } else {
+        true
+      }
+    };
+    if !okay {
+      self.write(nic,&[])?;
+      return Ok(());
+    }
+
+    // 更新自己的接收队列 序号 + 数据长度
+    self.recv.nxt = seqn.wrapping_add(slen);
+    // 如果没有ack的标记位则直接返回不处理
+    if !tcph.ack() {
+      return Ok(());
+    }
+    // SND.UNA < SEG.ACK =< SND.NXT
+    // 客户端的确认号是否在合理的范围内
+    let ackn = tcph.acknowledgment_number();
+    if let State::SynRcvd = self.state {
+      if is_between_wrapped(self.send.una.wrapping_sub(1),ackn,self.send.nxt.wrapping_add(1)) {
+        self.state = State::Estab;
+      } else {
+         // TODO <SEQ=SEG.ACK><CTL=RST>
+      }
+    }
+    if let State::Estab | State::FinWait1 | State::FinWait2 = self.state {
+      if !is_between_wrapped(self.send.una,ackn,self.nxt.wrapping_add(1)) {
         return Ok(());
       }
+      self.send.una = ackn;
+      // TODO
+      // 关闭连接
+      if let State::Estab = self.state {
+        self.tcp.fin = true;
+        self.write(nic,&[])?;
+        self.state = State::FinWait1;
+      }
     }
-    match self.state {
-      // 我们已经发送了SYN + ACK的状态
-      // 我们期望收到对方发来的ACK
-      State::SynRcvd => {
-        if !tcph.ack() {
-          // 它必须是一个ACK
-          return Ok(());
+    if let State::FinWait1 = self.state {
+      if self.send.una == self.send.iss + 2 {
+        self.state = State::FinWait2;
+      }
+    }
+    if tcph.fin() {
+      match self.state {
+        State::FinWait2 => {
+          self.write(nic,&[])?;
+          self.state = State::TimeWait;
         }
-        // 连接状态
-        self.state = State::Estab;
-        // 这里为什么要终止连接呢？
-      }
-      State::Estab => {
-        // 完成了三次握手
+        _ => unimplemented!(),
       }
     }
+    Ok(())
+    
 }
 // 判断x是在start和end区间之内的一个函数
 fn is_between_wrapped(start:u32,x:u32, end:u32) -> bool {
   use::std::cmp::Ordering;
-  match start.cmp(x) {
+  match start.cmp(&x) {
     Ordering::Equal => return false,
     Ordering::Less => {
       // 在x > start的前提下,满足以下条件证明不在区间内
@@ -1017,3 +1040,7 @@ fn is_between_wrapped(start:u32,x:u32, end:u32) -> bool {
   true
 }
 ```
+
+## 总结
+
+我们仅仅完成基础的功能即可,我暂时结束这系列的学习
